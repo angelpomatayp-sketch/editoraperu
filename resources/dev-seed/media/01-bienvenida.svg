@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920" width="1080" height="1920">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b1f3a"/>
+      <stop offset="1" stop-color="#1d4e89"/>
+    </linearGradient>
+  </defs>
+  <rect width="1080" height="1920" fill="url(#g)"/>
+  <circle cx="540" cy="620" r="260" fill="none" stroke="#d62828" stroke-width="24"/>
+  <text x="540" y="660" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="120" font-weight="700" fill="#ffffff">EP</text>
+  <text x="540" y="1080" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="96" font-weight="700" fill="#ffffff">Bienvenidos</text>
+  <text x="540" y="1200" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="64" fill="#ffffff" opacity="0.85">a Editora Perú</text>
+  <text x="540" y="1840" text-anchor="middle" font-family="Consolas, monospace" font-size="32" fill="#ffffff" opacity="0.5">Contenido de prueba</text>
+</svg>

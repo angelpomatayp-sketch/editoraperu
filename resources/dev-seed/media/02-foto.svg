@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920" width="1080" height="1920">
+  <rect width="1080" height="1920" fill="#7a1010"/>
+  <rect x="290" y="420" width="500" height="380" rx="48" fill="none" stroke="#ffffff" stroke-width="20"/>
+  <rect x="440" y="370" width="200" height="70" rx="20" fill="#ffffff"/>
+  <circle cx="540" cy="610" r="120" fill="none" stroke="#ffffff" stroke-width="20"/>
+  <text x="540" y="1080" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="88" font-weight="700" fill="#ffffff">Tómate una foto</text>
+  <text x="540" y="1200" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="60" fill="#ffffff" opacity="0.85">con nuestros personajes</text>
+  <text x="540" y="1840" text-anchor="middle" font-family="Consolas, monospace" font-size="32" fill="#ffffff" opacity="0.5">Contenido de prueba</text>
+</svg>

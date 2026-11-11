@@ -1,0 +1,47 @@
+appId: pe.editoraperu.totem
+productName: Totem Editora Peru
+copyright: Editora Perú
+directories:
+  output: dist
+  buildResources: resources
+files:
+  - out/**
+  - package.json
+  # ONNX Runtime trae binarios para todas las plataformas; el tótem es Windows x64.
+  - '!**/node_modules/onnxruntime-node/bin/napi-v6/darwin/**'
+  - '!**/node_modules/onnxruntime-node/bin/napi-v6/linux/**'
+  - '!**/node_modules/onnxruntime-node/bin/napi-v6/win32/arm64/**'
+asar: true
+# Bibliotecas de Visual C++ junto a ONNX Runtime: equipos nuevos sin instalar nada más.
+afterPack: scripts/after-pack.cjs
+# sharp y ONNX Runtime usan binarios nativos que no pueden cargarse desde dentro del archivo asar.
+asarUnpack:
+  - '**/node_modules/sharp/**'
+  - '**/node_modules/@img/**'
+  - '**/node_modules/onnxruntime-node/**'
+  - '**/node_modules/ffmpeg-static/**'
+# Modelos de recorte y motor WASM de MediaPipe (se preparan con `npm run models`).
+extraResources:
+  - from: resources/models
+    to: models
+  - from: resources/vendor
+    to: vendor
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: totem-editora-peru-${version}-setup.${ext}
+nsis:
+  # Instalación por usuario: sin contraseña de administrador ni pantallas de opciones. Se instala en
+  # %LOCALAPPDATA%\Programs y abre la aplicación al terminar. En el tótem siempre se usa la misma cuenta.
+  oneClick: true
+  perMachine: false
+  allowElevation: false
+  runAfterFinish: true
+  createDesktopShortcut: false
+  createStartMenuShortcut: true
+  # Desinstalar deja el equipo limpio (datos en %LOCALAPPDATA%\EditoraPeruTotem, caché e inicio
+  # automático) para reinstalar desde cero.
+  # Actualizar (instalar una versión nueva encima) conserva los datos: ver resources/installer.nsh.
+  deleteAppDataOnUninstall: true
+  include: resources/installer.nsh

@@ -1,0 +1,24 @@
+node_modules/
+out/
+dist/
+.claude/
+.vscode/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+!.env.*.example
+# Datos locales de desarrollo (base, fotos, bitácoras)
+.data/
+# Modelos de recorte y motor WASM: se descargan y copian con `npm run models`
+resources/models/
+resources/vendor/
+# Material local de referencia, no necesario para compilar ni ejecutar las pruebas.
+/readme.md
+/demo.mp4
+/docs/pruebas/evidencias/
+# Servicio de publicación: configuración real (contiene la clave) y datos
+publicador/app/config.php
+publicador/storage/*
+!publicador/storage/.htaccess
+*.log

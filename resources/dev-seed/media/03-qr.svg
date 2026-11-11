@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1920" width="1080" height="1920">
+  <rect width="1080" height="1920" fill="#0f3d2e"/>
+  <g fill="#ffffff">
+    <rect x="340" y="380" width="140" height="140"/>
+    <rect x="600" y="380" width="140" height="140"/>
+    <rect x="340" y="640" width="140" height="140"/>
+    <rect x="530" y="570" width="60" height="60"/>
+    <rect x="620" y="660" width="60" height="60"/>
+    <rect x="680" y="720" width="60" height="60"/>
+    <rect x="560" y="740" width="40" height="40"/>
+  </g>
+  <g fill="#0f3d2e">
+    <rect x="370" y="410" width="80" height="80"/>
+    <rect x="630" y="410" width="80" height="80"/>
+    <rect x="370" y="670" width="80" height="80"/>
+  </g>
+  <text x="540" y="1080" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="88" font-weight="700" fill="#ffffff">Escanea el QR</text>
+  <text x="540" y="1200" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="60" fill="#ffffff" opacity="0.85">y llévate tu fotografía</text>
+  <text x="540" y="1840" text-anchor="middle" font-family="Consolas, monospace" font-size="32" fill="#ffffff" opacity="0.5">Contenido de prueba</text>
+</svg>

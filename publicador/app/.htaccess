@@ -1,0 +1,2 @@
+# Por si esta carpeta quedara dentro de la raíz pública: nunca servir su contenido.
+Require all denied
