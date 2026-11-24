@@ -1,7 +1,22 @@
 import { describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import { refineMatte } from '../../src/infra/imaging/refineMatte'
 
 describe('refinado fino del recorte', () => {
+  it('conserva byte por byte el resultado previo al reutilizar memoria auxiliar', () => {
+    const w = 137
+    const h = 93
+    const photo = new Uint8Array(w * h * 3)
+    const mask = new Uint8Array(w * h)
+    let seed = 9173
+    for (let i = 0; i < photo.length; i++) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+      photo[i] = seed >>> 24
+    }
+    for (let i = 0; i < mask.length; i++) mask[i] = photo[i * 3]!
+    expect(createHash('sha256').update(refineMatte(mask, photo, w, h)).digest('hex'))
+      .toBe('0259dc7739cb67fd62878943e6d042e819cc97550f3cc4d10d405f97390a9c1b')
+  })
   // Foto de 120×60: mitad izquierda oscura (persona), mitad derecha clara (fondo).
   const width = 120
   const height = 60

@@ -1,7 +1,7 @@
 {
   "name": "editora-peru-totem",
   "productName": "Tótem Editora Perú",
-  "version": "0.2.34",
+  "version": "0.2.53",
   "description": "Sistema interactivo para tótem digital de Editora Perú",
   "private": true,
   "main": "./out/main/index.js",
@@ -17,7 +17,7 @@
     "models": "node scripts/fetch-models.mjs",
     "reset-data": "cross-env ELECTRON_RUN_AS_NODE=1 electron scripts/reset-data.mjs",
     "test:e2e": "electron-vite build && node --no-warnings tests/e2e/run.mjs",
-    "dist": "node scripts/check-models.mjs && cross-env TOTEM_EMBED_PUBLICATION=1 electron-vite build && electron-builder --win --x64 && node scripts/check-package.mjs"
+    "dist": "node scripts/check-models.mjs && cross-env TOTEM_EMBED_PUBLICATION=1 electron-vite build && node scripts/check-built-publication.mjs && electron-builder --win --x64 && node scripts/check-package.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.0.1",

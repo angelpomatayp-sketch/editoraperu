@@ -146,6 +146,7 @@ export class ContentAdmin {
       allowCameraBackground: config.allowCameraBackground,
       photo: config.photo,
       characterSlots: config.characterSlots,
+      characterVideoTransforms: config.characterVideoTransforms,
       freePlacement: config.freePlacement,
       characterAnimation: config.characterAnimation,
       resources,
@@ -219,7 +220,8 @@ export class ContentAdmin {
       photo: input.photo,
       characterSlots: input.characterSlots,
       freePlacement: input.freePlacement ?? current.freePlacement,
-      characterAnimation: input.characterAnimation ?? current.characterAnimation
+      characterAnimation: input.characterAnimation ?? current.characterAnimation,
+      characterVideoTransforms: input.characterVideoTransforms ?? current.characterVideoTransforms
     })
     const resources = this.deps.repo.listResources(input.id)
     this.deps.repo.transaction(() => {
@@ -239,6 +241,28 @@ export class ContentAdmin {
   }
 
   // ----- Recursos -----
+
+  async replaceScenarioImage(input: AdminInput<'resources.replaceScenarioImage'>, actorId: string): Promise<AdminCampaign | null> {
+    const resource = this.resource(input.campaignId, input.resourceId)
+    if (resource.type !== 'scenario') throw new AdminError('invalid_input', 'Solo puede reemplazar la imagen de un escenario')
+    const imported = await this.importFrom('image', path => importImage(path, this.deps.contentDir, `campaigns/${input.campaignId}`))
+    if (!imported) return null
+    try {
+      const hole = await this.findPhotoHole(imported.filePath)
+      this.deps.repo.transaction(() => {
+        // El diálogo puede permanecer abierto mientras cambia el estado del recurso.
+        this.resource(input.campaignId, input.resourceId)
+        this.deps.repo.replaceScenarioImage(resource.id, imported, hole, this.iso())
+      })
+    } catch (error) {
+      rmSync(join(this.deps.contentDir, imported.filePath), { force: true })
+      throw error
+    }
+    // No se sobreescribe ni elimina el archivo anterior: las imágenes ya generadas y
+    // cualquier referencia previamente cargada permanecen intactas.
+    this.record('resource.replace_image', resource.id, actorId, { campaignId: input.campaignId, width: imported.width, height: imported.height })
+    return this.getCampaign(input.campaignId)
+  }
 
   async addResource(input: AdminInput<'resources.add'>, actorId: string): Promise<AdminCampaign | null> {
     this.campaign(input.campaignId)

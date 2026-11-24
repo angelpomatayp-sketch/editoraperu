@@ -15,6 +15,56 @@ import {
 
 const OUT = { width: 1000, height: 2000 }
 
+describe('ajuste puntual de cuadros de video', () => {
+  const slots = [{ x: 0.1, y: 0.2, scale: 0.3 }]
+  const options = { placements: [], limits: { enabled: false, minScale: 0.1, maxScale: 1 }, output: OUT }
+  const video = (): LayerResource => res('video', 'character', 20, { preserveFrame: true })
+
+  it('sin ajuste conserva exactamente el encuadre anterior', () => {
+    expect(placeCharacters([video()], slots, options)[0]).toMatchObject({ posX: 0, posY: 0, scale: 1 })
+    const wide = { ...video(), width: 2000, height: 1000 }
+    expect(placeCharacters([wide], slots, options)[0]).toMatchObject({ posX: 0, posY: 0.375, scale: 1 })
+  })
+
+  it('reduce el cuadro completo conservando el centro y el apoyo inferior', () => {
+    const placed = placeCharacters([video()], slots, { ...options, videoTransforms: { video: { scale: 0.8, x: 0, y: 0 } } })[0]!
+    expect(placed.posX).toBeCloseTo(0.1)
+    expect(placed.posY).toBeCloseTo(0.2)
+    expect(placed.scale).toBe(0.8)
+    expect(placed.posY + placed.scale).toBeCloseTo(1)
+  })
+
+  it('permite desplazar cada video sin afectar a los demás ni a los estáticos', () => {
+    const placed = placeCharacters([video(), { ...video(), id: 'otro' }, res('estatico', 'character', 20)], [...slots, ...slots, ...slots], {
+      ...options, videoTransforms: { video: { scale: 0.7, x: -0.1, y: -0.05 }, estatico: { scale: 0.1, x: 0.5, y: 0.5 } }
+    })
+    expect(placed[0]!.posX).toBeCloseTo(0.05)
+    expect(placed[0]!.posY).toBeCloseTo(0.25)
+    expect(placed[1]).toMatchObject({ posX: 0, posY: 0, scale: 1 })
+    expect(placed[2]).toMatchObject({ posX: 0.1, posY: 0.2, scale: 0.3 })
+  })
+
+  it('la vista previa y la foto 4K usan la misma geometría proporcional', () => {
+    const transforms = { video: { scale: 0.63, x: 0.07, y: -0.08 } }
+    const place = (output: { width: number; height: number }) => placeCharacters([video()], slots, { ...options, output, videoTransforms: transforms })
+    const preview = place({ width: 1080, height: 1920 })
+    const final = place({ width: 2160, height: 3840 })
+    expect(preview).toEqual(final)
+    const inputs = { photoRegion: DEFAULT_PHOTO_REGION, scenario: null, frame: null, overlays: [] }
+    const a = buildCompositionPlan({ ...inputs, characters: preview }, { width: 1080, height: 1920 }).find(l => l.kind === 'placed')!
+    const b = buildCompositionPlan({ ...inputs, characters: final }, { width: 2160, height: 3840 }).find(l => l.kind === 'placed')!
+    if (a.kind !== 'placed' || b.kind !== 'placed') throw new Error('Falta personaje')
+    for (const key of ['left', 'top', 'width', 'height'] as const) expect(Math.abs(b[key] - a[key] * 2)).toBeLessThanOrEqual(2)
+  })
+
+  it('rechaza escalas y desplazamientos fuera de rango', () => {
+    for (const transform of [{ scale: 0, x: 0, y: 0 }, { scale: 1.1, x: 0, y: 0 }, { scale: 0.8, x: 0.6, y: 0 }]) {
+      expect(campaignConfigSchema.safeParse({ characterVideoTransforms: { video: transform } }).success).toBe(false)
+    }
+    expect(campaignConfigSchema.parse({}).characterVideoTransforms).toBeUndefined()
+  })
+})
+
 function res(id: string, type: LayerResource['type'], layerOrder: number, extra: Partial<LayerResource> = {}): LayerResource {
   return { id, type, src: `${id}.png`, width: 500, height: 1000, layerOrder, posX: 0, posY: 0, scale: 1, ...extra }
 }

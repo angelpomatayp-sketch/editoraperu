@@ -21,7 +21,7 @@ afterEach(() => {
 
 /** Captura simulada: "persona" (óvalo de piel con torso) sobre una pared clara, sin fondo verde. */
 async function portrait(): Promise<Uint8Array> {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720">
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="2160" viewBox="0 0 1280 720">
     <rect width="1280" height="720" fill="#d9d4cc"/>
     <ellipse cx="640" cy="300" rx="120" ry="150" fill="#c58c6a"/>
     <rect x="460" y="430" width="360" height="290" rx="120" fill="#26324a"/>

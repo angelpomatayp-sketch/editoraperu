@@ -369,6 +369,7 @@ interface ResourceRowProps {
 }
 
 function ResourceRow({ resource, first, last, campaignId, run, onRemove, scenarios }: ResourceRowProps): React.JSX.Element {
+  const [replacingImage, setReplacingImage] = useState(false)
   const update = (changes: { name?: string; active?: boolean; scenarioIds?: string[] }) =>
     void run('resources.update', {
       campaignId,
@@ -494,6 +495,12 @@ function ResourceRow({ resource, first, last, campaignId, run, onRemove, scenari
         )}
       </div>
       <div className="aitem__tools">
+        {resource.type === 'scenario' && <button type="button" className="btn" disabled={replacingImage} onClick={async () => {
+          setReplacingImage(true)
+          try {
+            await run('resources.replaceScenarioImage', { campaignId, resourceId: resource.id }, 'Imagen del escenario reemplazada; se conservaron sus personajes y ajustes')
+          } finally { setReplacingImage(false) }
+        }}>{replacingImage ? 'Reemplazando…' : 'Reemplazar imagen…'}</button>}
         <button type="button" className="btn btn--icon" disabled={first} aria-label="Subir" onClick={() => void run('resources.move', { campaignId, resourceId: resource.id, direction: 'up' })}>
           ↑
         </button>

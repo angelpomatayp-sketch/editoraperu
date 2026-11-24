@@ -27,6 +27,7 @@ const GROUPS: { title: string; fields: [path: string, label: string, kind?: Kind
       ['capture.positionHint', 'Aviso «Ubíquese aquí» sobre la zona de la persona hasta que alguien se ubique', 'boolean'],
       ['capture.rotation', 'Rotación de la cámara (grados: 0, 90, 180 o 270), si está montada girada'],
       ['capture.autoFraming', 'Encuadre automático: centrar y agrandar a la persona, de cuerpo entero (con recorte automático del fondo)', 'boolean'],
+      ['capture.matchCharacterSize', 'Adaptar el tamaño de la persona al personaje seleccionado (con recorte automático del fondo)', 'boolean'],
       ['capture.framingPercent', 'Encuadre fijo (%), si no hay encuadre automático: 0 = imagen completa, 100 = llenar la zona (zoom)']
     ]
   },
@@ -143,6 +144,9 @@ export function GeneralSettings(): React.JSX.Element {
       ))}
       {settings.retention.enabled && (
         <Notice kind="info">La conservación activada elimina fotografías y anonimiza datos antiguos de forma automática e irreversible.</Notice>
+      )}
+      {settings.capture.matchCharacterSize && (
+        <Notice kind="info">El ajuste al personaje funciona sin activar el encuadre automático general. Usa la altura visible y el apoyo del primer personaje seleccionado, dentro de la zona de la persona. Requiere cuerpo entero y recorte automático del fondo; no modifica el fondo real, el croma ni los escenarios con hueco para la foto. Si no hay una referencia válida, se conserva el encuadre habitual.</Notice>
       )}
       {message && <Notice kind={message.kind}>{message.text}</Notice>}
       <div className="aform__actions">

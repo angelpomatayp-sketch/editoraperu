@@ -5,6 +5,7 @@ import { PublicFlow } from './public/PublicFlow'
 import { ServiceUnavailable } from './public/ServiceUnavailable'
 import { DevPanel } from './ui/DevPanel'
 import { ReservedCorner } from './ui/ReservedCorner'
+import { ConfirmDialog } from './ui/ConfirmDialog'
 
 interface Loaded {
   status: AppStatus
@@ -14,6 +15,9 @@ interface Loaded {
 export function App(): React.JSX.Element {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [mode, setMode] = useState<'public' | 'admin'>('public')
+  const [confirmClose, setConfirmClose] = useState(false)
+  const [closing, setClosing] = useState(false)
+  const [closeError, setCloseError] = useState<string | null>(null)
   /** Cambia al volver del panel, para que la experiencia pública se monte de nuevo con los cambios. */
   const [publicKey, setPublicKey] = useState(0)
 
@@ -31,6 +35,7 @@ export function App(): React.JSX.Element {
       if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'a') {
         event.preventDefault()
         void window.totem.reservedGesture()
+        setConfirmClose(false)
         setMode('admin')
       }
     }
@@ -56,7 +61,7 @@ export function App(): React.JSX.Element {
 
   // La acción reservada solo existe en la pantalla de atracción y en la de servicio no disponible,
   // para no interferir con los botones del recorrido.
-  const reserved = <ReservedCorner onTrigger={() => setMode('admin')} visible={status.isDev} />
+  const reserved = <ReservedCorner onTrigger={() => setMode('admin')} onClose={() => { setCloseError(null); setConfirmClose(true) }} />
 
   return (
     <>
@@ -69,6 +74,20 @@ export function App(): React.JSX.Element {
         </>
       )}
       {status.isDev && <DevPanel status={status} />}
+      {confirmClose && <ConfirmDialog
+        className="home-close-dialog"
+        title="¿Desea cerrar la aplicación?"
+        message={closeError ?? 'Se cerrará el aplicativo del tótem. Windows permanecerá encendido.'}
+        confirmLabel={closing ? 'Cerrando…' : 'Cerrar aplicación'}
+        cancelLabel="Cancelar"
+        disabled={closing}
+        onCancel={() => setConfirmClose(false)}
+        onConfirm={() => {
+          if (closing) return
+          setClosing(true)
+          void window.totem.confirmQuit(true).catch(error => { setCloseError(String(error)); setClosing(false) })
+        }}
+      />}
     </>
   )
 }

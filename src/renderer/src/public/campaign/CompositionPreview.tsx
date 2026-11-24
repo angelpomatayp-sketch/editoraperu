@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { CAMERA_PHOTO_REGION, CAMERA_SCENARIO_ID, type CampaignDetail, type CharacterOption, type ResourceOption, type Selections } from '../../../../shared/campaign'
 import { PREVIEW_OUTPUT } from '../../../../shared/composition'
 import { buildCompositionPlan, photoRegionFor, placeCharacters, type LayerResource } from '../../../../shared/compositionPlan'
-import { DEFAULT_CHROMA, detectGreenScreen, type ChromaSettings } from '../../../../shared/chroma'
+import { CHARACTER_CHROMA, detectGreenScreen, type ChromaSettings } from '../../../../shared/chroma'
 import { ChromaVideo } from '../capture/ChromaVideo'
 import { SegmentationVideo } from '../capture/SegmentationVideo'
 
@@ -54,8 +54,9 @@ function CharacterMedia({ character, motion, delayMs, onFinished }: { character:
   const [videoEnded, setVideoEnded] = useState(false)
   const [rendererReady, setRendererReady] = useState(character.animationBackground === 'alpha')
   const [revealed, setRevealed] = useState(false)
-  const [videoChroma, setVideoChroma] = useState<ChromaSettings>(DEFAULT_CHROMA)
+  const [videoChroma, setVideoChroma] = useState<ChromaSettings>(CHARACTER_CHROMA)
   const finishedRef = useRef(onFinished)
+  const finishedOnce = useRef(false)
   finishedRef.current = onFinished
   const isGif = character.animationUrl?.toLowerCase().endsWith('.gif') ?? false
   // Los videos se reproducen una vez por ciclo, solo durante la entrada, y deciden su final mediante
@@ -66,6 +67,8 @@ function CharacterMedia({ character, motion, delayMs, onFinished }: { character:
     && (isGif || (motion.cycle > 0 && !videoEnded))
 
   const finishVideo = () => {
+    if (finishedOnce.current) return
+    finishedOnce.current = true
     setVideoEnded(true)
     finishedRef.current?.()
   }
@@ -81,7 +84,7 @@ function CharacterMedia({ character, motion, delayMs, onFinished }: { character:
     if (context) {
       context.drawImage(element, 0, 0, width, height)
       const detected = detectGreenScreen(context.getImageData(0, 0, width, height).data, width, height)
-      if (detected && detected.ratio >= 0.35) setVideoChroma({ ...DEFAULT_CHROMA, keyColor: detected.keyColor })
+      if (detected && detected.ratio >= 0.35) setVideoChroma({ ...CHARACTER_CHROMA, keyColor: detected.keyColor })
     }
     setRendererReady(true)
   }
@@ -89,22 +92,48 @@ function CharacterMedia({ character, motion, delayMs, onFinished }: { character:
   useEffect(() => {
     const element = video.current
     if (!element || !animated || !rendererReady) return
+    let cancelled = false
     let revealTimer: ReturnType<typeof setTimeout> | null = null
     const timer = setTimeout(() => {
+      // El componente se remonta por ciclo; refuerza que una repetición arranque en el primer cuadro.
+      element.currentTime = 0
       void element.play()
         .then(() => {
+          if (cancelled) { element.pause(); return }
           revealTimer = setTimeout(() => setRevealed(true), CHARACTER_PREROLL_MS)
         })
         .catch(() => {
+          if (cancelled) return
           setFailedUrl(character.animationUrl)
           finishVideo()
         })
     }, delayMs)
     return () => {
+      cancelled = true
+      element.pause()
       clearTimeout(timer)
       if (revealTimer) clearTimeout(revealTimer)
     }
   }, [animated, character.animationUrl, delayMs, motion.cycle, motion.mode, rendererReady])
+
+  // Respaldo solo ante falta real de avance: un video que progresa no se corta por su duración.
+  useEffect(() => {
+    if (!animated || isGif) return
+    let lastTime = -1
+    let lastProgress = performance.now()
+    const timer = setInterval(() => {
+      const element = video.current
+      if (element && element.currentTime > lastTime) {
+        lastTime = element.currentTime
+        lastProgress = performance.now()
+      }
+      if (performance.now() - lastProgress >= 30_000) {
+        setFailedUrl(character.animationUrl)
+        finishVideo()
+      }
+    }, 500)
+    return () => clearInterval(timer)
+  }, [animated, isGif, character.animationUrl])
 
   // Los GIF no exponen control de reproducción; se montan ocultos y se revelan tras el mismo
   // pre-roll para mantener una entrada consistente con MP4 y WebM.
@@ -149,7 +178,7 @@ function CharacterMedia({ character, motion, delayMs, onFinished }: { character:
             }}
           />
           {character.animationBackground === 'chroma' ? (
-            <ChromaVideo videoRef={video} chroma={videoChroma} mirror={false} />
+            <ChromaVideo videoRef={video} chroma={videoChroma} mirror={false} characterEdges />
           ) : (
             <SegmentationVideo videoRef={video} mirror={false} framing={0} onReady={() => setRendererReady(true)} />
           )}
@@ -202,6 +231,7 @@ export function CompositionPreview({ detail, selections, person, children, class
           scenario: cameraBackground ? null : asLayer(scenario!, 'scenario'),
           characters: placeCharacters(characters, detail.characterSlots, {
             placements: [],
+            videoTransforms: detail.characterVideoTransforms,
             limits: { ...detail.freePlacement, enabled: false },
             output: PREVIEW_OUTPUT
           }),

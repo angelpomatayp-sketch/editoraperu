@@ -126,12 +126,17 @@ export class Maintenance {
     }
     const targets = this.retentionTargets()
     const nowIso = this.now().toISOString()
-    for (const photo of targets.photos) {
+    const warnBefore = new Date(this.now().getTime() - Math.max(0, this.deps.settings.get().retention.photoDays - 1) * DAY_MS).toISOString()
+    const warned = this.deps.repo.warnPhotoRetention(warnBefore, nowIso)
+    if (warned) this.deps.audit.record({ level: 'warn', category: 'storage', action: 'retention.notice', result: 'ok', actor, detail: { photos: warned, minimumNoticeHours: 24 } })
+    const warnedBefore = new Date(this.now().getTime() - DAY_MS).toISOString()
+    const eligible = targets.photos.filter(photo => this.deps.repo.wasWarnedBefore(photo.id, warnedBefore))
+    for (const photo of eligible) {
       rmSync(join(this.deps.paths.root, photo.file_path), { force: true })
-      this.deps.repo.markPhotoDeleted(photo.id, nowIso)
+      this.deps.repo.markLocalPhotoPurged(photo.id, nowIso)
     }
     for (const id of targets.participations) this.deps.repo.anonymize(id, nowIso)
-    const result = { photos: targets.photos.length, participations: targets.participations.length }
+    const result = { photos: eligible.length, participations: targets.participations.length }
     this.deps.audit.record({ level: 'info', category: 'storage', action: 'retention', result: 'ok', actor, detail: result })
     return result
   }

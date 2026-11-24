@@ -20,6 +20,7 @@ import { freeDiskMegabytes } from '../../infra/storage/paths'
 import type { BootstrapOutcome } from '../bootstrap'
 import type { AdminApi } from '../admin/adminApi'
 import type { AdminResult, AdminStatus, LoginResult } from '../../shared/admin'
+import { controlledQuit } from '../kiosk/kioskGuard'
 
 export interface IpcOptions {
   outcome: BootstrapOutcome
@@ -55,7 +56,7 @@ const composeArgs = z.tuple([
   z.array(placementSchema.nullable()).max(MAX_CHARACTERS).catch([]),
   framePlacementSchema.nullable().optional().catch(null)
 ])
-const cameraProblemArgs = z.tuple([z.enum(['not_found', 'permission_denied', 'in_use', 'failed', 'disconnected'])])
+const cameraProblemArgs = z.tuple([z.enum(['not_found', 'permission_denied', 'in_use', 'failed', 'disconnected', 'resolution_unsupported'])])
 
 export function registerIpc({ outcome, isDev, version, admin }: IpcOptions): void {
   const context = outcome.ok ? outcome.context : null
@@ -103,8 +104,10 @@ export function registerIpc({ outcome, isDev, version, admin }: IpcOptions): voi
         cameraLabel: capture.cameraLabel,
         framingPercent: capture.framingPercent,
         autoFraming: capture.autoFraming,
+        matchCharacterSize: capture.matchCharacterSize,
         rotation: capture.rotation,
         positionHint: capture.positionHint,
+        cameraControlsEnabled: capture.cameraControlsEnabled,
         cameraControls: capture.cameraControls,
         maxRetakes: capture.maxRetakes
       }
@@ -198,6 +201,12 @@ export function registerIpc({ outcome, isDev, version, admin }: IpcOptions): voi
 
   ipcMain.handle(IPC.reservedGesture, () => {
     context?.audit.record({ level: 'info', category: 'kiosk', action: 'reserved_gesture', result: 'ok' })
+  })
+
+  // Cierre público solicitado por el operador del tótem: no necesita una sesión administrativa.
+  ipcMain.handle(IPC.confirmQuit, (_event, confirmed: unknown) => {
+    if (confirmed !== true) return
+    controlledQuit(context?.audit)
   })
 
   // Módulo administrativo (8.11 a 8.23): toda operación se valida en AdminApi.

@@ -7,6 +7,11 @@ export const PREVIEW_OUTPUT = { width: 1080, height: 1920 } as const
  */
 export const OUTPUT = { width: 2160, height: 3840, jpegQuality: 95 } as const
 
+/** El límite de ampliación se mide en píxeles de la foto final, nunca en los de la vista previa. */
+export function photoRegionPixels(region: { width: number; height: number }): { width: number; height: number } {
+  return { width: Math.max(1, Math.round(region.width * OUTPUT.width)), height: Math.max(1, Math.round(region.height * OUTPUT.height)) }
+}
+
 /** Calidad JPEG (1–100) con la que se guarda la captura original. */
 export const CAPTURE_JPEG_QUALITY = 95
 

@@ -39,7 +39,7 @@ class FakeClient implements PublicationClient {
 
 async function composedSession() {
   const { sessionId, participationId } = app.registerParticipant()
-  const jpeg = await sharp({ create: { width: 640, height: 480, channels: 3, background: '#00b140' } }).jpeg().toBuffer()
+  const jpeg = await sharp({ create: { width: 3840, height: 2160, channels: 3, background: '#00b140' } }).jpeg().toBuffer()
   await app.capture.saveCapture(sessionId, new Uint8Array(jpeg))
   const composed = await app.capture.compose(sessionId)
   if (!composed.ok) throw new Error('no compuso')

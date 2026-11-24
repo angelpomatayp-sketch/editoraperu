@@ -19,6 +19,7 @@ const api: TotemApi = {
   reportCameraProblem: (problem) => ipcRenderer.invoke(IPC.reportCameraProblem, problem),
   publish: (sessionId) => ipcRenderer.invoke(IPC.publish, sessionId),
   reservedGesture: () => ipcRenderer.invoke(IPC.reservedGesture),
+  confirmQuit: (confirmed) => ipcRenderer.invoke(IPC.confirmQuit, confirmed),
   adminStatus: () => ipcRenderer.invoke(IPC.adminStatus),
   adminSetup: (payload) => ipcRenderer.invoke(IPC.adminSetup, payload),
   adminLogin: (payload) => ipcRenderer.invoke(IPC.adminLogin, payload),

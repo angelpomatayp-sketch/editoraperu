@@ -1,5 +1,6 @@
-import { existsSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import sharp from 'sharp'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AdminAttract, AdminCampaign, AdminMedia, AdminUserRow, DashboardData, LoginResult } from '../../src/shared/admin'
 import type { Settings } from '../../src/shared/settings'
@@ -101,14 +102,14 @@ describe('campañas y recursos (8.13, 8.14)', () => {
     let campaign = await t.call<AdminCampaign>(token, 'campaigns.create', { name: 'Feria del Libro 2026' })
     expect(campaign.code).toMatch(/^FERIA-DEL-LIBRO-2026-[0-9A-F]{4}$/)
     expect(campaign.status).toBe('draft')
-    expect(campaign.problems).toContain('Agregue al menos un escenario activo.')
+    expect(campaign.problems).toContain('Agregue al menos un escenario activo o habilite «Usar fondo real de la cámara» en Datos.')
     expect(await errorCode(t.call(token, 'campaigns.setStatus', { id: campaign.id, status: 'active' }))).toBe('invalid_campaign')
 
     await t.nextFile('machu_picchu.jpg', { width: 1080, height: 1920, format: 'jpeg' })
     campaign = await t.call<AdminCampaign>(token, 'resources.add', { campaignId: campaign.id, type: 'scenario' })
     const scenario = campaign.resources.find((r) => r.type === 'scenario')!
     expect(scenario).toMatchObject({ name: 'machu picchu', width: 1080, height: 1920, active: true })
-    expect(campaign.problems).toEqual(['La campaña exige personaje: asigne al menos un personaje activo a un escenario o, si la campaña no usa personajes, en «Datos» cambie «Personajes» a «No se usa».'])
+    expect(campaign.problems).toEqual(['La campaña exige personaje: agregue al menos un personaje activo o, si no usará personajes, en «Datos» cambie «Personajes» a «No se usa».'])
 
     // Un personaje sin transparencia se rechaza (RF-REC-002).
     await t.nextFile('nina.jpg', { format: 'jpeg' })
@@ -212,6 +213,95 @@ describe('campañas y recursos (8.13, 8.14)', () => {
         t.call(token, 'campaigns.saveLayout', { id: campaign.id, photo: { x: 0.5, y: 0, width: 0.8, height: 0.5 }, characterSlots: [{ x: 0, y: 0, scale: 0.2 }], overlays: [] })
       )
     ).toBe('invalid_input')
+  })
+
+  it('guarda, conserva y restablece el ajuste de video sin cambiar la zona del participante', async () => {
+    t = adminApp()
+    const token = t.admin()
+    const id = t.app.campaignId('DEMO-LECTURA')
+    const initial = await t.call<AdminCampaign>(token, 'campaigns.get', { id })
+    const character = initial.resources.find(r => r.type === 'character')!
+    const layout = { id, photo: initial.photo, characterSlots: initial.characterSlots, overlays: [] }
+    const transforms = { [character.id]: { scale: 0.75, x: -0.06, y: 0.03 } }
+    await t.call(token, 'campaigns.saveLayout', { ...layout, characterVideoTransforms: transforms })
+    let result = await t.call<AdminCampaign>(token, 'campaigns.get', { id })
+    expect(result.characterVideoTransforms).toEqual(transforms)
+    expect(result.photo).toEqual(initial.photo)
+    expect(result.characterSlots).toEqual(initial.characterSlots)
+    result = await t.call<AdminCampaign>(token, 'campaigns.saveLayout', layout)
+    expect(result.characterVideoTransforms).toEqual(transforms)
+    result = await t.call<AdminCampaign>(token, 'campaigns.saveLayout', { ...layout, characterVideoTransforms: {} })
+    expect(result.characterVideoTransforms).toEqual({})
+  })
+
+  it('reemplaza solo el escenario conservando personajes, ajustes y fotografías ya generadas', async () => {
+    t = adminApp()
+    const token = t.admin()
+    const { sessionId } = t.app.registerParticipant()
+    const id = t.app.campaignId('DEMO-LECTURA')
+    let campaign = await t.call<AdminCampaign>(token, 'campaigns.get', { id })
+    const scenario = campaign.resources.find(r => r.type === 'scenario')!
+    const characters = campaign.resources.filter(r => r.type === 'character')
+    const transforms = { [characters[0]!.id]: { scale: 0.8, x: 0.02, y: -0.03 } }
+    campaign = await t.call<AdminCampaign>(token, 'campaigns.saveLayout', {
+      id, photo: campaign.photo, characterSlots: campaign.characterSlots, overlays: [], characterVideoTransforms: transforms
+    })
+    const camera = await sharp({ create: { width: 3840, height: 2160, channels: 3, background: '#993333' } }).jpeg().toBuffer()
+    expect(await t.app.capture.saveCapture(sessionId, camera)).toEqual({ ok: true })
+    expect((await t.app.capture.compose(sessionId)).ok).toBe(true)
+    const photos = t.app.db.prepare('SELECT * FROM photos ORDER BY id').all() as { file_path: string }[]
+    const bytes = photos.map(p => readFileSync(join(t.app.paths.root, p.file_path)))
+    const old = t.app.db.prepare('SELECT * FROM resources WHERE id = ?').get(scenario.id) as { file_path: string }
+    const placements = t.app.db.prepare('SELECT * FROM campaign_resources WHERE campaign_id = ? ORDER BY resource_id').all(id)
+    const version = (t.app.db.prepare('SELECT config_version FROM campaigns WHERE id = ?').get(id) as { config_version: number }).config_version
+    await t.nextFile('nuevo-escenario.jpg', { width: 1080, height: 1920, format: 'jpeg' })
+    const result = await t.call<AdminCampaign>(token, 'resources.replaceScenarioImage', { campaignId: id, resourceId: scenario.id })
+    expect(result.resources.find(r => r.id === scenario.id)).toMatchObject({ id: scenario.id, name: scenario.name, width: 1080, height: 1920, active: scenario.active })
+    expect(result.resources.find(r => r.id === scenario.id)!.imageUrl).not.toBe(scenario.imageUrl)
+    expect(result.resources.filter(r => r.type === 'character')).toEqual(characters)
+    expect(result.characterVideoTransforms).toEqual(transforms)
+    expect(result.photo).toEqual(campaign.photo)
+    expect(result.characterSlots).toEqual(campaign.characterSlots)
+    expect(t.app.db.prepare('SELECT * FROM campaign_resources WHERE campaign_id = ? ORDER BY resource_id').all(id)).toEqual(placements)
+    expect(t.app.db.prepare('SELECT * FROM photos ORDER BY id').all()).toEqual(photos)
+    photos.forEach((p, i) => expect(readFileSync(join(t.app.paths.root, p.file_path))).toEqual(bytes[i]))
+    expect(existsSync(join(t.app.contentDir, old.file_path))).toBe(true)
+    expect((t.app.db.prepare('SELECT config_version FROM campaigns WHERE id = ?').get(id) as { config_version: number }).config_version).toBe(version + 1)
+    expect(t.app.catalog.getDetail(id)!.scenarios.find(s => s.id === scenario.id)).toMatchObject({ width: 1080, height: 1920 })
+  })
+
+  it('cancelar o elegir una imagen inválida no altera el escenario ni sus asociaciones', async () => {
+    t = adminApp()
+    const token = t.admin()
+    const id = t.app.campaignId('DEMO-LECTURA')
+    const before = await t.call<AdminCampaign>(token, 'campaigns.get', { id })
+    const scenario = before.resources.find(r => r.type === 'scenario')!
+    const payload = { campaignId: id, resourceId: scenario.id }
+    t.pickRaw(null)
+    expect(await t.call(token, 'resources.replaceScenarioImage', payload)).toBeNull()
+    t.pickRaw(join(__dirname, 'admin.test.ts'))
+    expect(await errorCode(t.call(token, 'resources.replaceScenarioImage', payload))).toBe('invalid_file')
+    expect(await t.call(token, 'campaigns.get', { id })).toEqual(before)
+    const character = before.resources.find(r => r.type === 'character')!
+    expect(await errorCode(t.call(token, 'resources.replaceScenarioImage', { campaignId: id, resourceId: character.id }))).toBe('invalid_input')
+  })
+
+  it('recalcula y limpia la zona transparente al reemplazar la imagen del escenario', async () => {
+    t = adminApp()
+    const token = t.admin()
+    const id = t.app.campaignId('DEMO-LECTURA')
+    const campaign = await t.call<AdminCampaign>(token, 'campaigns.get', { id })
+    const scenario = campaign.resources.find(r => r.type === 'scenario')!
+    const file = join(t.files, 'escenario-con-hueco.png')
+    await sharp({ create: { width: 600, height: 1000, channels: 4, background: '#334455' } })
+      .composite([{ input: { create: { width: 300, height: 600, channels: 4, background: '#000000' } }, left: 150, top: 200, blend: 'dest-out' }])
+      .png().toFile(file)
+    t.pickRaw(file)
+    let result = await t.call<AdminCampaign>(token, 'resources.replaceScenarioImage', { campaignId: id, resourceId: scenario.id })
+    expect(result.resources.find(r => r.id === scenario.id)!.photoHole).not.toBeNull()
+    await t.nextFile('escenario-opaco.png')
+    result = await t.call<AdminCampaign>(token, 'resources.replaceScenarioImage', { campaignId: id, resourceId: scenario.id })
+    expect(result.resources.find(r => r.id === scenario.id)!.photoHole).toBeNull()
   })
 
   it('un recurso usado en participaciones se archiva; uno sin usar se elimina con su archivo (RF-REC-006)', async () => {
@@ -375,5 +465,20 @@ describe('resumen y sistema (8.12, RF-CFG-002)', () => {
       await errorCode(t.call(token, 'settings.saveBackground', { method: 'chroma', chroma: { keyColor: 'verde', similarity: 0.2, smoothness: 0.1, spill: 0.5 } }))
     ).toBe('invalid_input')
     expect(await errorCode(t.call(token, 'settings.saveBackground', { method: 'magia', chroma: t.settings.get().chroma }))).toBe('invalid_input')
+  })
+
+  it('guarda controles y color por separado sin que Configuración general los sobrescriba', async () => {
+    t = adminApp()
+    const token = t.admin()
+    const oldGeneral = await t.call<Settings>(token, 'settings.getGeneral')
+    const input = {
+      method: 'segmentation', chroma: oldGeneral.chroma,
+      cameraControls: { focusMode: 'manual', focusDistance: 20 }, cameraControlsEnabled: true, matchSceneTone: true
+    }
+    expect(await t.call(token, 'settings.saveBackground', input)).toMatchObject(input)
+    await t.call(token, 'settings.saveGeneral', oldGeneral)
+    expect(await t.call(token, 'settings.getBackground')).toMatchObject(input)
+    await t.call(token, 'settings.saveBackground', { ...input, cameraControlsEnabled: false, matchSceneTone: false })
+    expect(t.settings.get().capture).toMatchObject({ cameraControls: input.cameraControls, cameraControlsEnabled: false, matchSceneTone: false })
   })
 })

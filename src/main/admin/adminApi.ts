@@ -34,6 +34,7 @@ export interface AdminApiDeps {
   audit: AuditLog
   /** Cierre controlado de la aplicación (RF-KIO-005). */
   quit: (actorId: string) => void
+  refreshConsents?: () => void
 }
 
 interface Caller {
@@ -78,6 +79,7 @@ function operations(deps: AdminApiDeps): { [M in AdminMethod]: Operation<M> } {
     'resources.add': { permission: 'campaigns.manage', handler: (i, c) => content.addResource(i, c.userId) },
     'resources.update': { permission: 'campaigns.manage', handler: (i, c) => content.updateResource(i, c.userId) },
     'resources.setAnimation': { permission: 'campaigns.manage', handler: (i, c) => content.setCharacterAnimation(i, c.userId) },
+    'resources.replaceScenarioImage': { permission: 'campaigns.manage', handler: (i, c) => content.replaceScenarioImage(i, c.userId) },
     'resources.clearAnimation': { permission: 'campaigns.manage', handler: (i, c) => content.clearCharacterAnimation(i, c.userId) },
     'resources.updateMotion': { permission: 'campaigns.manage', handler: (i, c) => content.updateCharacterMotion(i, c.userId) },
     'resources.move': { permission: 'campaigns.manage', handler: (i, c) => content.moveResource(i.campaignId, i.resourceId, i.direction, c.userId) },
@@ -111,6 +113,7 @@ function operations(deps: AdminApiDeps): { [M in AdminMethod]: Operation<M> } {
     'participations.photo': { permission: 'participations.personal', handler: (i, c) => ops.photo(i.photoId, viewer(c)) },
     'participations.delete': { permission: 'participations.delete', handler: (i, c) => ops.delete(i.id, i.reason, viewer(c)) },
     'publication.retry': { permission: 'publication.retry', handler: (i, c) => ops.retry(i.photoId, viewer(c)) },
+    'publication.qr': { permission: 'publication.qr', handler: (i, c) => ops.qr(i.photoId, viewer(c)) },
 
     'reports.participations': { permission: 'reports.export', handler: (i, c) => ops.exportParticipations(i, viewer(c)) },
     'reports.summary': { permission: 'reports.export', handler: (i) => ops.summary(i) },
@@ -119,9 +122,17 @@ function operations(deps: AdminApiDeps): { [M in AdminMethod]: Operation<M> } {
     'audit.list': { permission: 'audit.viewContent', handler: (i, c) => ops.auditPage(i, i.page, can(c.role, 'audit.view')) },
 
     'settings.getGeneral': { permission: 'settings.general', handler: () => settings.getGeneral() },
-    'settings.saveGeneral': { permission: 'settings.general', handler: (i, c) => settings.saveGeneral(i, c.userId) },
+    'settings.saveGeneral': { permission: 'settings.general', handler: (i, c) => {
+      const result = settings.saveGeneral(i, c.userId)
+      deps.refreshConsents?.()
+      return result
+    } },
     'settings.exportConfig': { permission: 'settings.general', handler: (_i, c) => maintenance.exportConfig(c.userId) },
-    'settings.importConfig': { permission: 'settings.general', handler: (_i, c) => maintenance.importConfig(c.userId) },
+    'settings.importConfig': { permission: 'settings.general', handler: async (_i, c) => {
+      const result = await maintenance.importConfig(c.userId)
+      if (result) deps.refreshConsents?.()
+      return result
+    } },
 
     'maintenance.status': { permission: 'maintenance.backup', handler: () => maintenance.status() },
     'maintenance.backup': { permission: 'maintenance.backup', handler: (i, c) => maintenance.backup(i.includePhotos, c.userId) },

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { PublicationError, type PublicationClient } from '../../src/core/publication/publicationClient'
 import type {
   AuditRow,
+  AdminPhotoQr,
   DeletionResult,
   ExportResult,
   MaintenanceStatus,
@@ -41,7 +42,7 @@ class FakeClient implements PublicationClient {
 async function fullParticipation(client: FakeClient) {
   t.publicationClient.current = client
   const { sessionId, participationId } = t.app.registerParticipant()
-  const jpeg = await sharp({ create: { width: 640, height: 480, channels: 3, background: '#00b140' } }).jpeg().toBuffer()
+  const jpeg = await sharp({ create: { width: 3840, height: 2160, channels: 3, background: '#00b140' } }).jpeg().toBuffer()
   await t.app.capture.saveCapture(sessionId, new Uint8Array(jpeg))
   await t.app.capture.compose(sessionId)
   await t.publication.publish(sessionId)
@@ -101,8 +102,8 @@ describe('participaciones (8.16)', () => {
     const detail = await t.call<ParticipationDetail>(admin, 'participations.get', { id })
     expect(detail.selections).toEqual({ scenario: 'Biblioteca', characters: ['Lector'], frame: 'Marco Lectura' })
     expect(detail.consents.map((c) => [c.type, c.version, c.accepted])).toEqual([
-      ['image_use', '0.1-prueba', true],
-      ['terms_data', '0.1-prueba', true]
+      ['image_use', expect.stringMatching(/^1.0-totem-/), true],
+      ['terms_data', expect.stringMatching(/^1.0-totem-/), true]
     ])
     const final = detail.photos.find((p) => p.kind === 'final')!
     expect(final.status).toBe('published')
@@ -143,6 +144,29 @@ describe('participaciones (8.16)', () => {
 })
 
 describe('fotografías (8.17)', () => {
+  it('muestra QR vigente sin volver a subir y respeta permisos, vencimiento y eliminación', async () => {
+    t = adminApp()
+    const admin = t.admin()
+    const id = await fullParticipation(new FakeClient())
+    const { content, operator } = await roles(admin)
+    const detail = await t.call<ParticipationDetail>(admin, 'participations.get', { id })
+    const final = detail.photos.find(p => p.kind === 'final')!
+    const original = detail.photos.find(p => p.kind === 'original')!
+    expect(await errorCode(t.call(content, 'publication.qr', { photoId: final.id }))).toBe('forbidden')
+    expect(await errorCode(t.call(admin, 'publication.qr', { photoId: original.id }))).toBe('not_available')
+    const qr = await t.call<AdminPhotoQr>(operator, 'publication.qr', { photoId: final.id })
+    expect(qr.photoId).toBe(final.id)
+    expect(qr.qrDataUrl).toMatch(/^data:image\/png;base64,/)
+    expect((await sharp(Buffer.from(qr.qrDataUrl.split(',')[1]!, 'base64')).metadata()).width).toBe(480)
+    expect(qr).not.toHaveProperty('publicUrl')
+    const queue = t.app.db.prepare('SELECT attempts FROM publication_queue WHERE photo_id = ?').get(final.id)
+    await t.call(operator, 'publication.qr', { photoId: final.id })
+    expect(t.app.db.prepare('SELECT attempts FROM publication_queue WHERE photo_id = ?').get(final.id)).toEqual(queue)
+    t.app.db.prepare("UPDATE photos SET expires_at = '2000-01-01T00:00:00Z' WHERE id = ?").run(final.id)
+    expect(await errorCode(t.call(operator, 'publication.qr', { photoId: final.id }))).toBe('not_available')
+    t.app.db.prepare("UPDATE photos SET expires_at = '2099-01-01T00:00:00Z', status = 'deleted' WHERE id = ?").run(final.id)
+    expect(await errorCode(t.call(admin, 'publication.qr', { photoId: final.id }))).toBe('not_available')
+  })
   it('reintento manual de una publicación fallida (RF-FOT-003)', async () => {
     t = adminApp()
     const admin = t.admin()
@@ -152,9 +176,11 @@ describe('fotografías (8.17)', () => {
     const detail = await t.call<ParticipationDetail>(admin, 'participations.get', { id })
     const final = detail.photos.find((p) => p.kind === 'final')!
     expect(final.status).toBe('pending')
+    expect(await errorCode(t.call(admin, 'publication.qr', { photoId: final.id }))).toBe('not_available')
 
     client.fail = false
     expect(await t.call(admin, 'publication.retry', { photoId: final.id })).toEqual({ published: true })
+    expect((await t.call<AdminPhotoQr>(admin, 'publication.qr', { photoId: final.id })).qrDataUrl).toMatch(/^data:image\/png;base64,/)
     expect(await errorCode(t.call(admin, 'publication.retry', { photoId: final.id }))).toBe('not_retryable')
   })
 })
@@ -269,20 +295,44 @@ describe('configuración y mantenimiento (8.20, 8.22)', () => {
     expect((await t.call<MaintenanceStatus>(admin, 'maintenance.status')).lastBackupAt).toBeTruthy()
   })
 
-  it('la conservación está desactivada por defecto y, activada, elimina y anonimiza lo antiguo (RF-FOT-005, RN-009)', async () => {
+  it('la conservación activa elimina solo tras 24 horas de aviso y anonimiza a los 30 días', async () => {
     t = adminApp()
     const admin = t.admin()
     const id = await fullParticipation(new FakeClient())
-    expect(await errorCode(t.call(admin, 'maintenance.runRetention'))).toBe('retention_disabled')
+    expect(await t.call(admin, 'maintenance.runRetention')).toEqual({ photos: 0, participations: 0 })
 
     const settings = await t.call<Settings>(admin, 'settings.getGeneral')
-    await t.call(admin, 'settings.saveGeneral', { ...settings, retention: { enabled: true, photoDays: 30, personalDataDays: 365 } })
+    expect(settings.retention).toEqual({ enabled: true, photoDays: 7, personalDataDays: 30 })
     expect((await t.call<MaintenanceStatus>(admin, 'maintenance.status')).retentionPreview).toEqual({ photos: 0, participations: 0 })
 
     t.app.db.prepare("UPDATE participations SET started_at = '2025-01-01T00:00:00Z' WHERE id = ?").run(id)
+    t.app.db.prepare("UPDATE photos SET created_at = '2025-01-01T00:00:00Z' WHERE participation_id = ?").run(id)
     expect((await t.call<MaintenanceStatus>(admin, 'maintenance.status')).retentionPreview).toEqual({ photos: 2, participations: 1 })
-    expect(await t.call(admin, 'maintenance.runRetention')).toEqual({ photos: 2, participations: 1 })
+    expect(await t.call(admin, 'maintenance.runRetention')).toEqual({ photos: 0, participations: 1 })
+    expect(readdirSync(t.app.paths.finals)).not.toEqual([])
+    t.advance(86401)
+    const freshAdmin = t.login('admin', 'editora2026')
+    expect(await t.call(freshAdmin, 'maintenance.runRetention')).toEqual({ photos: 2, participations: 0 })
+    const finalId = (t.app.db.prepare("SELECT id FROM photos WHERE participation_id = ? AND kind = 'final'").get(id) as { id: string }).id
+    expect((await t.call<AdminPhotoQr>(freshAdmin, 'publication.qr', { photoId: finalId })).qrDataUrl).toMatch(/^data:image\/png;base64,/)
     expect(readdirSync(t.app.paths.finals)).toEqual([])
     expect(t.app.db.prepare('SELECT status, document_number FROM participations WHERE id = ?').get(id)).toEqual({ status: 'anonymized', document_number: null })
+  })
+
+  it('avisa de una pendiente antes de borrar y cancela su cola al vencer el margen', async () => {
+    t = adminApp()
+    const admin = t.admin()
+    const client = new FakeClient()
+    client.fail = true
+    const id = await fullParticipation(client)
+    t.app.db.prepare("UPDATE photos SET created_at = '2025-01-01T00:00:00Z' WHERE participation_id = ?").run(id)
+    const detail = await t.call<ParticipationDetail>(admin, 'participations.get', { id })
+    const photo = detail.photos.find(p => p.kind === 'final')!
+    expect(photo.retentionWarning).toContain('sin publicar')
+    expect(await t.call(admin, 'maintenance.runRetention')).toMatchObject({ photos: 0 })
+    expect(t.app.db.prepare('SELECT status FROM publication_queue WHERE photo_id = ?').get(photo.id)).toMatchObject({ status: 'pending' })
+    t.advance(86401)
+    expect(await t.call(t.login('admin', 'editora2026'), 'maintenance.runRetention')).toMatchObject({ photos: 2 })
+    expect(t.app.db.prepare('SELECT status FROM publication_queue WHERE photo_id = ?').get(photo.id)).toMatchObject({ status: 'cancelled' })
   })
 })

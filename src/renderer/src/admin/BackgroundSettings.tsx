@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   applyCameraControls,
+  applyConfiguredCameraControls,
   CAMERA_CONTROL_LABEL,
   CAMERA_MODE_CONTROLS,
   CAMERA_NUMERIC_CONTROLS,
@@ -10,6 +11,7 @@ import {
   type CameraControls
 } from '../../../shared/cameraControls'
 import type { BackgroundMethod, ChromaSettings } from '../../../shared/chroma'
+import { is4kCapture } from '../../../shared/capture'
 import { CameraError, cameraTrack, openCamera, stopCamera } from '../public/capture/camera'
 import { PersonVideo } from '../public/capture/PersonVideo'
 import { errorMessage, useAdmin } from './adminContext'
@@ -21,7 +23,7 @@ const METHODS: { value: BackgroundMethod; title: string; text: string }[] = [
   {
     value: 'segmentation',
     title: 'Recorte automático',
-    text: 'Detecta a la persona sobre cualquier fondo con modelos locales (MediaPipe y MODNet), sin Internet. Usa inteligencia artificial: requiere la aprobación de Editora Perú como cambio de alcance.'
+    text: 'Detecta a la persona con modelos locales, sin Internet: MediaPipe en vivo y BiRefNet Portrait en la foto final (MODNet si no está instalado). Usa inteligencia artificial: requiere la aprobación de Editora Perú como cambio de alcance.'
   },
   {
     value: 'chroma',
@@ -39,6 +41,8 @@ interface Background {
   method: BackgroundMethod
   chroma: ChromaSettings
   cameraControls: CameraControls
+  cameraControlsEnabled: boolean
+  matchSceneTone: boolean
 }
 
 const MODE_LABEL: Record<string, string> = { continuous: 'Automático', manual: 'Manual', 'single-shot': 'Automático una vez' }
@@ -52,13 +56,13 @@ export function BackgroundSettings(): React.JSX.Element {
   const [value, setValue] = useState<Background | null>(null)
   const [message, setMessage] = useState<{ kind: 'error' | 'ok' | 'info'; text: string } | null>(null)
   const [mirror, setMirror] = useState(true)
-  /** Resolución real de la cámara: 1280 × 720 es HD; 1920 × 1080, Full HD. */
-  const [resolution, setResolution] = useState<string | null>(null)
+  /** Resolución del vídeo en vivo; no es la medida de una foto tomada con ImageCapture. */
+  const [resolution, setResolution] = useState<{ width: number; height: number } | null>(null)
   const sourceRef = useRef<HTMLVideoElement | null>(null)
   const rawRef = useRef<HTMLVideoElement | null>(null)
-  /** Pista física de la cámara y sus valores de fábrica, para «Restablecer». */
+  /** Valores leídos al abrir, antes de aplicar calibración del tótem; no son valores de fábrica. */
   const trackRef = useRef<MediaStreamTrack | null>(null)
-  const factoryRef = useRef<CameraControls>({})
+  const initialControlsRef = useRef<CameraControls>({})
   const [capabilities, setCapabilities] = useState<CameraCapabilities | null>(null)
 
   useEffect(() => {
@@ -75,9 +79,11 @@ export function BackgroundSettings(): React.JSX.Element {
         const track = cameraTrack(stream)
         if (track) {
           trackRef.current = track
-          factoryRef.current = currentCameraControls(track)
+          initialControlsRef.current = currentCameraControls(track)
           setCapabilities(cameraCapabilities(track))
-          await applyCameraControls(track, (await loaded).cameraControls)
+          const saved = await loaded
+          if (cancelled) return stopCamera(stream)
+          await applyConfiguredCameraControls(track, saved.cameraControls, saved.cameraControlsEnabled)
         }
         if (sourceRef.current) sourceRef.current.srcObject = stream
         if (rawRef.current) rawRef.current.srcObject = stream
@@ -128,21 +134,36 @@ export function BackgroundSettings(): React.JSX.Element {
 
   /** Cambia un ajuste de la cámara y se ve al instante; se conserva al guardar. */
   const setControl = (changes: CameraControls) => {
-    if (!value) return
+    if (!value?.cameraControlsEnabled) return
     const cameraControls = { ...value.cameraControls, ...changes }
+    // Estos deslizadores solo se muestran en modo manual; guardar también ese modo aunque
+    // procediera de Logi Tune, para poder reproducir la calibración al abrir la próxima captura.
+    if (changes.exposureTime !== undefined) cameraControls.exposureMode = 'manual'
+    if (changes.colorTemperature !== undefined) cameraControls.whiteBalanceMode = 'manual'
+    if (changes.focusDistance !== undefined) cameraControls.focusMode = 'manual'
     setValue({ ...value, cameraControls })
     if (trackRef.current) void applyCameraControls(trackRef.current, cameraControls)
   }
 
   const resetControls = () => {
-    if (!value) return
+    if (!value?.cameraControlsEnabled) return
     setValue({ ...value, cameraControls: {} })
-    if (trackRef.current) void applyCameraControls(trackRef.current, factoryRef.current)
-    setMessage({ kind: 'info', text: 'Ajustes de la cámara restablecidos; guarde para conservarlo' })
+    if (trackRef.current) void applyCameraControls(trackRef.current, initialControlsRef.current)
+    setMessage({ kind: 'info', text: 'Se restauraron los valores leídos al abrir este panel; no es un reinicio de fábrica. Guarde para conservarlo.' })
+  }
+
+  const setCameraControlsEnabled = (enabled: boolean) => {
+    if (!value) return
+    setValue({ ...value, cameraControlsEnabled: enabled })
+    if (trackRef.current) void applyCameraControls(trackRef.current, enabled ? value.cameraControls : initialControlsRef.current)
+    setMessage({ kind: 'info', text: enabled
+      ? 'Se aplicarán solo los ajustes elegidos aquí. Guarde para conservarlo.'
+      : 'Se restauraron los valores leídos al abrir. Al capturar no se enviarán ajustes de imagen desde el tótem. Guarde para conservarlo.' })
   }
 
   if (!value) return <Card title="Fondo de la foto">Cargando…</Card>
   const chroma = value.chroma
+  const shownControls = value.cameraControlsEnabled ? value.cameraControls : {}
   const setChroma = (changes: Partial<ChromaSettings>) => setValue({ ...value, chroma: { ...chroma, ...changes } })
 
   const slider = (key: 'similarity' | 'smoothness' | 'spill', label: string, max: number, hint: string) => (
@@ -179,12 +200,12 @@ export function BackgroundSettings(): React.JSX.Element {
             playsInline
             className="calibration__raw"
             onPointerDown={sample}
-            onLoadedMetadata={(e) => setResolution(`${e.currentTarget.videoWidth} × ${e.currentTarget.videoHeight}`)}
-            onResize={(e) => setResolution(`${e.currentTarget.videoWidth} × ${e.currentTarget.videoHeight}`)}
+            onLoadedMetadata={(e) => setResolution({ width: e.currentTarget.videoWidth, height: e.currentTarget.videoHeight })}
+            onResize={(e) => setResolution({ width: e.currentTarget.videoWidth, height: e.currentTarget.videoHeight })}
           />
           <figcaption>
             {value.method === 'chroma' ? 'Cámara (toque el fondo verde)' : 'Cámara'}
-            {resolution && ` · captura a ${resolution} px`}
+            {resolution && ` · vista en vivo: ${resolution.width} × ${resolution.height} px${is4kCapture(resolution.width, resolution.height) ? ' (4K)' : ' (inferior a 4K)'}`}
           </figcaption>
         </figure>
         <figure>
@@ -194,6 +215,12 @@ export function BackgroundSettings(): React.JSX.Element {
           <figcaption>Resultado en vivo</figcaption>
         </figure>
       </div>
+
+      <p className="muted">
+        La foto original debe alcanzar 3840 × 2160 píxeles (2160 × 3840 con la cámara girada).
+        Se comprueba antes de guardarla; si la cámara entrega menos resolución, se muestra un aviso y no se guarda.
+        {resolution && !is4kCapture(resolution.width, resolution.height) && ' La vista en vivo actual es inferior a 4K: revise la cámara seleccionada y compruebe una captura antes de atender al público.'}
+      </p>
 
       <div className="aform">
         {value.method === 'chroma' && (
@@ -214,21 +241,39 @@ export function BackgroundSettings(): React.JSX.Element {
             iluminada y con un fondo que contraste con su ropa.
           </p>
         )}
+        <label className="inline">
+          <input type="checkbox" checked={value.matchSceneTone} disabled={value.method === 'none'}
+            onChange={(e) => setValue({ ...value, matchSceneTone: e.target.checked })} />
+          Adaptar brillo y color del participante al escenario y personajes
+        </label>
+        <p className="muted">
+          Desactivado conserva los colores de la captura. Es independiente del tamaño y del recorte de bordes.
+          Solo afecta a la foto final con fondo recortado; no cambia la cámara ni el fondo real.
+        </p>
         <h3>Ajustes de imagen de la cámara</h3>
+        <label className="inline">
+          <input type="checkbox" checked={value.cameraControlsEnabled} onChange={(e) => setCameraControlsEnabled(e.target.checked)} />
+          Aplicar ajustes de imagen desde el tótem
+        </label>
+        <p className="muted">
+          Desactivado no se envían ajustes de brillo, exposición, balance de blancos ni enfoque a la cámara.
+          Use este modo si calibra con Logi Tune. Se sigue solicitando captura 4K y se conserva el giro y espejo.
+          Los ajustes guardados aquí no se borran.
+        </p>
         {capabilities && (Object.keys(capabilities.numeric).length > 0 || Object.keys(capabilities.modes).length > 0) ? (
           <>
             <p className="muted">
-              Compensan la luz del lugar en la propia cámara, antes de la foto: con poca luz suba el brillo o la exposición; con luz de fondo (ventanas), suba la
-              compensación de exposición. Se aplican cada vez que se abre la cámara. Solo aparecen los ajustes que esta cámara permite.
+              Solo se aplican los ajustes que elija con el control del tótem activado. Los valores «de la cámara»
+              se leen al abrir el panel; sus unidades y rangos dependen del controlador y pueden diferir de Logi Tune.
             </p>
             {CAMERA_MODE_CONTROLS.map((key) => {
               const modes = capabilities.modes[key]
               if (!modes) return null
-              const current = value.cameraControls[key] ?? factoryRef.current[key] ?? ''
+              const current = shownControls[key] ?? initialControlsRef.current[key] ?? ''
               return (
                 <label key={key}>
                   {CAMERA_CONTROL_LABEL[key]}
-                  <select value={current} onChange={(e) => setControl({ [key]: e.target.value as CameraControls[typeof key] })}>
+                  <select disabled={!value.cameraControlsEnabled} value={current} onChange={(e) => setControl({ [key]: e.target.value as CameraControls[typeof key] })}>
                     {modes.map((m) => (
                       <option key={m} value={m}>
                         {MODE_LABEL[m] ?? m}
@@ -241,23 +286,24 @@ export function BackgroundSettings(): React.JSX.Element {
             {CAMERA_NUMERIC_CONTROLS.map((key) => {
               const range = capabilities.numeric[key]
               if (!range) return null
-              // El tiempo de exposición y la temperatura de color solo se usan en modo manual.
-              if (key === 'exposureTime' && (value.cameraControls.exposureMode ?? factoryRef.current.exposureMode) !== 'manual') return null
-              if (key === 'colorTemperature' && (value.cameraControls.whiteBalanceMode ?? factoryRef.current.whiteBalanceMode) !== 'manual') return null
-              const current = value.cameraControls[key] ?? factoryRef.current[key] ?? range.min
+              // Los valores directos de exposición, temperatura y enfoque solo se usan en modo manual.
+              if (key === 'exposureTime' && (shownControls.exposureMode ?? initialControlsRef.current.exposureMode) !== 'manual') return null
+              if (key === 'colorTemperature' && (shownControls.whiteBalanceMode ?? initialControlsRef.current.whiteBalanceMode) !== 'manual') return null
+              if (key === 'focusDistance' && (shownControls.focusMode ?? initialControlsRef.current.focusMode) !== 'manual') return null
+              const current = shownControls[key] ?? initialControlsRef.current[key] ?? range.min
               return (
                 <label key={key} className="slider">
                   <span>
                     {CAMERA_CONTROL_LABEL[key]}: <strong>{current}</strong>
-                    {value.cameraControls[key] === undefined && <span className="afield__hint"> (de la cámara)</span>}
+                    {shownControls[key] === undefined && <span className="afield__hint"> (de la cámara)</span>}
                   </span>
-                  <input type="range" min={range.min} max={range.max} step={range.step} value={current} onChange={(e) => setControl({ [key]: Number(e.target.value) })} />
+                  <input disabled={!value.cameraControlsEnabled} type="range" min={range.min} max={range.max} step={range.step} value={current} onChange={(e) => setControl({ [key]: Number(e.target.value) })} />
                 </label>
               )
             })}
             <div>
-              <button type="button" className="btn" onClick={resetControls}>
-                Restablecer ajustes de la cámara
+              <button type="button" className="btn" disabled={!value.cameraControlsEnabled} onClick={resetControls}>
+                Restablecer valores leídos al abrir
               </button>
             </div>
           </>

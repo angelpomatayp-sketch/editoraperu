@@ -106,6 +106,13 @@ export class PublicationService {
     return this.deps.repository.releaseInterrupted(this.nowIso())
   }
 
+  /** Reintento del operador: procesa esa foto, no las primeras veinte de la cola. claim evita duplicados. */
+  async retryPhoto(photoId: string): Promise<boolean> {
+    const client = this.deps.client()
+    if (!client) return false
+    return (await this.attempt(client, photoId)).ok
+  }
+
   private async attempt(
     client: PublicationClient,
     photoId: string

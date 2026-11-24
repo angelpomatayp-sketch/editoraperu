@@ -76,14 +76,19 @@ final class PhotoStore
     /** Elimina el archivo y marca la publicación como eliminada; conserva solo la constancia técnica. */
     public function delete(array $row): void
     {
-        @unlink($this->path($row['file_name']));
+        $path = $this->path($row['file_name']);
+        if (is_file($path) && !@unlink($path) && is_file($path)) {
+            throw new RuntimeException('No se pudo eliminar una fotografía vencida');
+        }
         $this->pdo->prepare('UPDATE photos SET deleted_at = ? WHERE id = ?')->execute([utc_now(), $row['id']]);
     }
 
     /** Elimina las publicaciones vencidas (RF-QR-006). Devuelve cuántas eliminó. */
-    public function purgeExpired(): int
+    public function purgeExpired(int $limit = 0): int
     {
-        $stmt = $this->pdo->prepare('SELECT * FROM photos WHERE deleted_at IS NULL AND expires_at <= ?');
+        $sql = 'SELECT * FROM photos WHERE deleted_at IS NULL AND expires_at <= ? ORDER BY expires_at';
+        if ($limit > 0) $sql .= ' LIMIT ' . (int) $limit;
+        $stmt = $this->pdo->prepare($sql);
         $stmt->execute([utc_now()]);
         $count = 0;
         foreach ($stmt->fetchAll() as $row) {

@@ -33,7 +33,35 @@ function publicador_boot(): array
         $pdo->exec($statement);
     }
 
+    // Respaldo del cron: con tráfico, limpia lotes limitados una vez por hora.
+    // Sin tráfico sigue siendo necesaria la tarea cron para garantizar la limpieza puntual.
+    if (PHP_SAPI !== 'cli') publicador_cleanup_if_due($pdo, $config);
     return [$config, $pdo];
+}
+
+function publicador_cleanup_if_due(PDO $pdo, array $config): void
+{
+    $marker = dirname(rtrim($config['storage_dir'], '/\\')) . DIRECTORY_SEPARATOR . '.publicador-cleanup.lock';
+    clearstatcache(true, $marker);
+    if (is_file($marker) && filemtime($marker) > time() - 3600) return;
+    $lock = @fopen($marker, 'c+');
+    if (!$lock) { error_log('Publicador: no se pudo abrir el control de limpieza'); return; }
+    if (!flock($lock, LOCK_EX | LOCK_NB)) { fclose($lock); return; }
+    try {
+        // Otra solicitud pudo completar el trabajo mientras abríamos el archivo.
+        rewind($lock);
+        $last = (int) stream_get_contents($lock);
+        if ($last > time() - 3600) return;
+        (new PhotoStore($pdo, $config))->purgeExpired(200);
+        (new RateLimiter($pdo, (int) $config['rate_limit_per_minute']))->purge();
+        ftruncate($lock, 0);
+        rewind($lock);
+        fwrite($lock, (string) time());
+        fflush($lock);
+        touch($marker);
+    } catch (Throwable $error) {
+        error_log('Publicador: limpieza pendiente; revisar cron y permisos de almacenamiento');
+    } finally { flock($lock, LOCK_UN); fclose($lock); }
 }
 
 /** Fecha UTC en formato ISO 8601, comparable como texto. */

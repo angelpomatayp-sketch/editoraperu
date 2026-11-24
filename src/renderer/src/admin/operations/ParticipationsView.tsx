@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import type { DeletionResult, ParticipationDetail, ParticipationFilters, ParticipationPage } from '../../../../shared/admin'
+import { useEffect, useRef, useState } from 'react'
+import type { AdminPhotoQr, DeletionResult, ParticipationDetail, ParticipationFilters, ParticipationPage } from '../../../../shared/admin'
 import { errorMessage, useAdmin } from '../adminContext'
 import { Card, formatDate, Notice } from '../ui'
 import { EMPTY_FILTERS, ParticipationFiltersBar, PHOTO_TEXT, STATUS_TEXT } from './ParticipationFiltersBar'
@@ -92,6 +92,15 @@ function ParticipationDetailView({ id, onBack }: { id: string; onBack: () => voi
   const [message, setMessage] = useState<{ kind: 'error' | 'ok' | 'info'; text: string } | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [reason, setReason] = useState('')
+  const [qr, setQr] = useState<AdminPhotoQr | null>(null)
+  const [busyPhoto, setBusyPhoto] = useState<string | null>(null)
+  const qrRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    if (!qr) return
+    const frame = requestAnimationFrame(() => qrRef.current?.scrollIntoView({ block: 'center' }))
+    const timer = setTimeout(() => setQr(null), Math.min(90_000, Math.max(0, Date.parse(qr.expiresAt) - Date.now())))
+    return () => { clearTimeout(timer); cancelAnimationFrame(frame) }
+  }, [qr])
 
   const load = () =>
     call<ParticipationDetail>('participations.get', { id })
@@ -105,14 +114,27 @@ function ParticipationDetailView({ id, onBack }: { id: string; onBack: () => voi
   if (!detail) return <p>{message?.text ?? 'Cargando…'}</p>
 
   const retry = async (photoId: string) => {
+    setQr(null)
+    setBusyPhoto(photoId)
     setMessage({ kind: 'info', text: 'Reintentando la publicación…' })
     try {
       const result = await call<{ published: boolean }>('publication.retry', { photoId })
       setMessage(result.published ? { kind: 'ok', text: 'Fotografía publicada' } : { kind: 'error', text: 'No se pudo publicar; quedó en cola para reintentos' })
       void load()
+      if (result.published && can('publication.qr')) setQr(await call<AdminPhotoQr>('publication.qr', { photoId }))
     } catch (e) {
       setMessage({ kind: 'error', text: errorMessage(e) })
+    } finally {
+      setBusyPhoto(null)
     }
+  }
+
+  const showQr = async (photoId: string) => {
+    setQr(null)
+    setBusyPhoto(photoId)
+    try { setQr(await call<AdminPhotoQr>('publication.qr', { photoId })) }
+    catch (e) { setMessage({ kind: 'error', text: errorMessage(e) }) }
+    finally { setBusyPhoto(null) }
   }
 
   const remove = async () => {
@@ -120,6 +142,7 @@ function ParticipationDetailView({ id, onBack }: { id: string; onBack: () => voi
       const r = await call<DeletionResult>('participations.delete', { id, reason })
       setDeleting(false)
       setImage(null)
+      setQr(null)
       setMessage({
         kind: r.remotePending > 0 ? 'error' : 'ok',
         text:
@@ -199,18 +222,30 @@ function ParticipationDetailView({ id, onBack }: { id: string; onBack: () => voi
                     Cola: {p.queue.status}, {p.queue.attempts} intento(s){p.queue.lastError && `, último error: ${p.queue.lastError}`}
                   </span>
                 )}
+                {p.retentionWarning && <Notice kind="error">{p.retentionWarning}</Notice>}
                 <div className="aitem__row">
-                  {can('participations.personal') && p.status !== 'deleted' && (
+                  {can('participations.personal') && p.localAvailable && p.status !== 'deleted' && (
                     <button type="button" className="btn btn--small" onClick={() => void call<string>('participations.photo', { photoId: p.id }).then(setImage)}>
                       Ver fotografía
                     </button>
                   )}
                   {can('publication.retry') && p.kind === 'final' && (p.status === 'pending' || p.status === 'failed') && (
-                    <button type="button" className="btn btn--small" onClick={() => void retry(p.id)}>
+                    <button type="button" className="btn" disabled={busyPhoto !== null} onClick={() => void retry(p.id)}>
                       Reintentar publicación
                     </button>
                   )}
+                  {can('publication.qr') && p.kind === 'final' && p.status === 'published' && p.expiresAt && Date.parse(p.expiresAt) > Date.now() && (
+                    <button type="button" className="btn" disabled={busyPhoto !== null} onClick={() => void showQr(p.id)}>Mostrar QR</button>
+                  )}
                 </div>
+                {qr?.photoId === p.id && (
+                  <section ref={qrRef} className="admin-photo-qr" aria-label="QR de descarga de la fotografía">
+                    <strong>Escanee con su teléfono para descargar su fotografía</strong>
+                    <img src={qr.qrDataUrl} alt="Código QR de descarga" width={480} height={480} style={{ width: 'min(100%, 480px)', height: 'auto', display: 'block', margin: '16px auto' }} />
+                    <p>Disponible hasta {formatDate(qr.expiresAt)}. Quien tenga este QR puede acceder a la fotografía.</p>
+                    <button type="button" className="btn" onClick={() => setQr(null)}>Ocultar QR</button>
+                  </section>
+                )}
               </div>
             </li>
           ))}

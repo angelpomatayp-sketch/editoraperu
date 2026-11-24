@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { chromaOf, hexToRgb, type ChromaSettings } from '../../../../shared/chroma'
+import { BufferedVideo } from './BufferedVideo'
 
 interface ChromaVideoProps {
+  frozen?: boolean
   videoRef: RefObject<HTMLVideoElement | null>
   chroma: ChromaSettings
   mirror: boolean
   /** `rgb` permite quitar fondos neutros como blanco; el croma normal compara color sin luminancia. */
   mode?: 'chroma' | 'rgb'
+  characterEdges?: boolean
 }
 
 const VERTEX = `
@@ -30,6 +33,7 @@ uniform bool u_rgb_mode;
 uniform float u_similarity;
 uniform float u_smoothness;
 uniform float u_spill;
+uniform bool u_character_edges;
 varying vec2 v_uv;
 
 void main() {
@@ -44,6 +48,8 @@ void main() {
   float limit = max(c.r, c.b);
   if (!u_rgb_mode && c.g <= limit) alpha = 1.0;
   if (!u_rgb_mode && c.g > limit) color.g = limit + (c.g - limit) * (1.0 - u_spill);
+  // Solo personajes: quitar el tinte amarillo-verde de la transición, sin cambiar su silueta.
+  if (u_character_edges && !u_rgb_mode && alpha < 1.0 && c.g > limit + 0.008) color.g = (c.r + c.b) * 0.5;
   alpha *= color.a;
   gl_FragColor = vec4(color.rgb * alpha, alpha);
 }`
@@ -60,10 +66,11 @@ function compile(gl: WebGLRenderingContext, type: number, source: string): WebGL
  * Cámara en vivo con el fondo verde recortado (vista previa del croma), ajustada para cubrir su zona
  * sin deformarse. Si WebGL no está disponible, se muestra el video sin recortar.
  */
-export function ChromaVideo({ videoRef, chroma, mirror, mode = 'chroma' }: ChromaVideoProps): React.JSX.Element {
+export function ChromaVideo({ videoRef, chroma, mirror, mode = 'chroma', characterEdges = false, frozen = false }: ChromaVideoProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [fallback, setFallback] = useState(false)
-  const fallbackVideo = useRef<HTMLVideoElement | null>(null)
+  const frozenRef = useRef(frozen)
+  frozenRef.current = frozen
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -106,13 +113,22 @@ export function ChromaVideo({ videoRef, chroma, mirror, mode = 'chroma' }: Chrom
     gl.uniform1f(uniform('u_similarity'), chroma.similarity)
     gl.uniform1f(uniform('u_smoothness'), chroma.smoothness)
     gl.uniform1f(uniform('u_spill'), chroma.spill)
+    gl.uniform1i(uniform('u_character_edges'), characterEdges ? 1 : 0)
     gl.uniform1i(uniform('u_mirror'), mirror ? 1 : 0)
 
     let frame = 0
+    let videoWidth = 0
+    let videoHeight = 0
     const draw = () => {
       frame = requestAnimationFrame(draw)
       const video = videoRef.current
-      if (!video || video.readyState < 2 || !video.videoWidth) return
+      if (!video) return
+      if (!frozenRef.current) {
+        if (video.readyState < 2 || !video.videoWidth) return
+        videoWidth = video.videoWidth
+        videoHeight = video.videoHeight
+      }
+      if (!videoWidth || !videoHeight) return
 
       const width = canvas.clientWidth * devicePixelRatio
       const height = canvas.clientHeight * devicePixelRatio
@@ -123,13 +139,14 @@ export function ChromaVideo({ videoRef, chroma, mirror, mode = 'chroma' }: Chrom
       }
 
       // Recorte centrado equivalente a `object-fit: cover` y al `fit: cover` de la composición final.
-      const videoAspect = video.videoWidth / video.videoHeight
+      const videoAspect = videoWidth / videoHeight
       const canvasAspect = canvas.width / canvas.height
       const scale = videoAspect > canvasAspect ? [canvasAspect / videoAspect, 1] : [1, videoAspect / canvasAspect]
       gl.uniform2f(uniform('u_scale'), scale[0]!, scale[1]!)
       gl.uniform2f(uniform('u_offset'), (1 - scale[0]!) / 2, (1 - scale[1]!) / 2)
 
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video)
+      // Conservar la textura del último cuadro, incluso después de apagar la cámara.
+      if (!frozenRef.current) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video)
       gl.clearColor(0, 0, 0, 0)
       gl.clear(gl.COLOR_BUFFER_BIT)
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
@@ -142,16 +159,10 @@ export function ChromaVideo({ videoRef, chroma, mirror, mode = 'chroma' }: Chrom
       gl.deleteBuffer(buffer)
       gl.deleteProgram(program)
     }
-  }, [videoRef, chroma, mirror, mode])
-
-  useEffect(() => {
-    if (!fallback || !fallbackVideo.current || !videoRef.current) return
-    if (videoRef.current.srcObject) fallbackVideo.current.srcObject = videoRef.current.srcObject
-    else fallbackVideo.current.src = videoRef.current.currentSrc || videoRef.current.src
-  }, [fallback, videoRef])
+  }, [videoRef, chroma, mirror, mode, characterEdges])
 
   if (fallback) {
-    return <video ref={fallbackVideo} autoPlay muted playsInline className={`chroma-video${mirror ? ' mirrored' : ''}`} />
+    return <BufferedVideo videoRef={videoRef} mirror={mirror} frozen={frozen} />
   }
   return <canvas ref={canvasRef} className="chroma-video" />
 }

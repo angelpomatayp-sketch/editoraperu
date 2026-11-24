@@ -18,7 +18,7 @@ return [
     // Carpeta de fotografías, fuera de la raíz pública (RF-QR-005).
     'storage_dir' => __DIR__ . '/../storage/photos',
 
-    // Horas que el enlace permanece disponible (RF-QR-006). Valor provisional hasta aprobar PD-002.
+    // Horas desde la publicación exitosa; la tarea cron elimina los archivos vencidos.
     'ttl_hours' => 72,
 
     // Tamaño máximo aceptado por fotografía.

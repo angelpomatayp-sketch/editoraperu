@@ -182,7 +182,8 @@ export async function launch({ dataDir, camera = 'fake', extraArgs = [], env = {
   let target
   for (let i = 0; i < 100 && !target; i++) {
     try {
-      target = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === 'page')
+      // La ventana temporal de preparación del modelo no es la interfaz de la aplicación.
+      target = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === 'page' && t.url.startsWith('totem-app://renderer'))
     } catch {
       // Aún no inicia.
     }
@@ -291,7 +292,7 @@ export async function focusField(page, index) {
 }
 
 /** Recorre selección, registro y consentimientos hasta la cámara. */
-export async function registerParticipant(page, { campaign = 'Lectura en familia', scenario = 'Biblioteca', characters = ['Lectora'], name = 'maría josé', last = 'quispe mamani', dni = '12345678' } = {}) {
+export async function registerParticipant(page, { campaign = 'Lectura en familia', scenario = 'Biblioteca', characters = ['Lectora'], name = 'maría josé', last = 'quispe mamani', dni = '12345678', onBeforeCamera, cameraTimeoutMs = 10_000 } = {}) {
   await page.click('.campaign-card', campaign)
   await page.waitText('Elija un escenario')
   // Un toque en el escenario lo elige y avanza.
@@ -318,8 +319,9 @@ export async function registerParticipant(page, { campaign = 'Lectura en familia
   await page.waitText('Términos y condiciones')
   await page.evaluate(`[...document.querySelectorAll('.terms__check input')].forEach(i => { if (!i.checked) i.click() })`)
   await sleep(200)
+  if (onBeforeCamera) await onBeforeCamera()
   await page.click('.step__footer .touch-button', 'Continuar')
-  await page.waitText('Mire a la cámara', 10_000)
+  await page.waitText('Mire a la cámara', cameraTimeoutMs)
 }
 
 /** Toma la foto y espera el resultado; devuelve los milisegundos desde «Tomar foto» hasta el resultado. */

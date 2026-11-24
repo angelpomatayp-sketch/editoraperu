@@ -24,7 +24,7 @@ export const settingsSchema = z
       skipSingleCampaign: z.boolean()
     }),
     capture: z.object({
-      countdownSeconds: z.int().min(1).max(10),
+      countdownSeconds: z.int().min(1).max(30),
       /** Intentos fallidos de captura o composición antes de cancelar de forma segura (RF-CAP-007). */
       maxAttempts: z.int().min(1).max(5),
       soundEnabled: z.boolean(),
@@ -44,10 +44,16 @@ export const settingsSchema = z
        * entero. Si no se detecta a nadie (o sin recorte automático), se usa `framingPercent`.
        */
       autoFraming: z.boolean(),
+      /** Adapta la persona a la altura del primer personaje seleccionado; solo con recorte automático. */
+      matchCharacterSize: z.boolean().default(false),
       /** Cámara montada girada: grados (sentido horario) para enderezar la imagen. 0, 90, 180 o 270. */
       rotation: z.number().refine((v) => [0, 90, 180, 270].includes(v), { message: 'Use 0, 90, 180 o 270' }),
       /** Aviso grande «Ubíquese aquí» sobre la zona de la persona hasta que alguien se ubique. */
       positionHint: z.boolean(),
+      /** Solo aplicar calibración guardada si el operador lo activa; no reemplazar la del controlador. */
+      cameraControlsEnabled: z.boolean().default(false),
+      /** Corrección opcional de luminosidad y temperatura al componer una persona recortada. */
+      matchSceneTone: z.boolean().default(false),
       /** Ajustes de imagen de la cámara (brillo, exposición…), solo los que la cámara soporte. */
       cameraControls: cameraControlsSchema
     }),
@@ -101,7 +107,7 @@ export const DEFAULT_SETTINGS: Settings = {
   kiosk: { enabled: true, autoStart: true },
   session: { inactivityWarningSeconds: 60, inactivityCancelSeconds: 15 },
   experience: { skipSingleCampaign: true },
-  capture: { countdownSeconds: 3, maxAttempts: 3, soundEnabled: true, maxRetakes: 2, mirror: true, cameraLabel: '', framingPercent: 0, autoFraming: false, rotation: 0, positionHint: true, cameraControls: {} },
+  capture: { countdownSeconds: 10, maxAttempts: 3, soundEnabled: true, maxRetakes: 2, mirror: true, cameraLabel: '', framingPercent: 0, autoFraming: false, matchCharacterSize: false, rotation: 0, positionHint: true, cameraControlsEnabled: false, matchSceneTone: false, cameraControls: {} },
   background: { method: 'segmentation' },
   chroma: DEFAULT_CHROMA,
   attract: DEFAULT_ATTRACT,
@@ -109,6 +115,6 @@ export const DEFAULT_SETTINGS: Settings = {
   publication: { baseUrl: '', retryIntervalSeconds: 60, maxRetries: 30 },
   storage: { minFreeMegabytes: 2048, warnFreeMegabytes: 10240 },
   admin: { sessionTimeoutSeconds: 300, maxFailedLogins: 5, lockoutSeconds: 300 },
-  retention: { enabled: false, photoDays: 30, personalDataDays: 365 },
+  retention: { enabled: true, photoDays: 7, personalDataDays: 30 },
   timezone: 'America/Lima'
 }

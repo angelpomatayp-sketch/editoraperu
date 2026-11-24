@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import type { BackgroundMethod, ChromaSettings } from '../../../../shared/chroma'
-import { placeFrame, type FramePlacement } from '../../../../shared/compositionPlan'
+import { placeFrame, type CharacterFrameTarget, type FramePlacement } from '../../../../shared/compositionPlan'
 import { ChromaVideo } from './ChromaVideo'
 import { SegmentationVideo } from './SegmentationVideo'
+import { BufferedVideo } from './BufferedVideo'
 
 interface PersonVideoProps {
+  frozen?: boolean
   videoRef: RefObject<HTMLVideoElement | null>
   method: BackgroundMethod
   chroma: ChromaSettings
@@ -17,6 +19,9 @@ interface PersonVideoProps {
   regionPx?: { width: number; height: number }
   /** Encuadre automático de la persona (solo con recorte automático del fondo). */
   autoFraming?: boolean
+  characterTarget?: CharacterFrameTarget | null
+  /** Mantiene el encuadre en los últimos segundos, sin congelar el video. */
+  lockFraming?: boolean
   /** Recibe el encuadre automático en uso, para aplicar el mismo a la foto. */
   onPlacement?: (placement: FramePlacement | null) => void
   /** Aparición o salida de una persona (solo con recorte automático). */
@@ -55,24 +60,26 @@ export function PersonVideo({
   framing,
   regionPx,
   autoFraming,
+  characterTarget,
+  lockFraming,
   onPlacement,
   onPresence,
-  backdrop
+  backdrop,
+  frozen = false
 }: PersonVideoProps): React.JSX.Element {
-  const plainRef = useRef<HTMLVideoElement | null>(null)
   const size = useVideoSize(videoRef)
-  useEffect(() => {
-    if (method === 'none' && plainRef.current && videoRef.current) plainRef.current.srcObject = videoRef.current.srcObject
-  })
 
   // Con recorte automático, la vista calcula el encuadre (fijo o automático) cuadro a cuadro.
   if (method === 'segmentation') {
     return (
       <SegmentationVideo
+        frozen={frozen}
         videoRef={videoRef}
         mirror={mirror}
         framing={framing}
         autoFraming={autoFraming}
+        characterTarget={characterTarget}
+        lockFraming={lockFraming}
         regionPx={regionPx}
         onPlacement={onPlacement}
         onPresence={onPresence}
@@ -82,9 +89,9 @@ export function PersonVideo({
 
   const content =
     method === 'chroma' ? (
-      <ChromaVideo videoRef={videoRef} chroma={chroma} mirror={mirror} />
+      <ChromaVideo videoRef={videoRef} chroma={chroma} mirror={mirror} frozen={frozen} />
     ) : (
-      <video ref={plainRef} autoPlay muted playsInline className={`chroma-video${mirror ? ' mirrored' : ''}`} />
+      <BufferedVideo videoRef={videoRef} mirror={mirror} frozen={frozen} />
     )
 
   if (framing === undefined || regionPx === undefined || !size) return content
@@ -100,7 +107,7 @@ export function PersonVideo({
   if (!backdrop) return frame
   return (
     <>
-      <BackdropCanvas videoRef={videoRef} mirror={mirror} aspect={regionPx.width / regionPx.height} />
+      <BackdropCanvas videoRef={videoRef} mirror={mirror} aspect={regionPx.width / regionPx.height} frozen={frozen} />
       {frame}
     </>
   )
@@ -115,8 +122,10 @@ const BACKDROP_FPS = 8
  * y ampliada al tamaño de la zona, lo que la deja desenfocada sin el costo de desenfocar un video 4K.
  * Coincide con el relleno de la foto final (la misma imagen ampliada y desenfocada).
  */
-function BackdropCanvas({ videoRef, mirror, aspect }: { videoRef: RefObject<HTMLVideoElement | null>; mirror: boolean; aspect: number }): React.JSX.Element {
+function BackdropCanvas({ videoRef, mirror, aspect, frozen }: { videoRef: RefObject<HTMLVideoElement | null>; mirror: boolean; aspect: number; frozen: boolean }): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const frozenRef = useRef(frozen)
+  frozenRef.current = frozen
   useEffect(() => {
     const canvas = canvasRef.current
     const context = canvas?.getContext('2d')
@@ -124,6 +133,7 @@ function BackdropCanvas({ videoRef, mirror, aspect }: { videoRef: RefObject<HTML
     canvas.width = BACKDROP_WIDTH
     canvas.height = Math.max(1, Math.round(BACKDROP_WIDTH / aspect))
     const draw = () => {
+      if (frozenRef.current) return
       const video = videoRef.current
       if (!video?.videoWidth || !video.videoHeight) return
       // Recorte «cover» de la cámara a la proporción de la zona.

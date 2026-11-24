@@ -4,6 +4,7 @@ export type SaveCaptureError =
   | 'not_registered'
   | 'already_captured'
   | 'invalid_image'
+  | 'resolution_unsupported'
   | 'insufficient_disk'
   | 'too_many_attempts'
   | 'storage_error'
@@ -20,6 +21,17 @@ export interface CapturedFrame {
 
 /** Lado máximo aceptado para un cuadro de la cámara (8K). */
 export const MAX_FRAME_SIDE = 7680
+
+/** Mínimo UHD de la captura original, antes de cualquier recorte o montaje. */
+export const UHD_CAPTURE = { width: 3840, height: 2160 } as const
+
+export function is4kCapture(width: number, height: number): boolean {
+  return Number.isInteger(width) && Number.isInteger(height)
+    && Math.max(width, height) >= UHD_CAPTURE.width
+    && Math.min(width, height) >= UHD_CAPTURE.height
+}
+
+export const CAMERA_4K_MESSAGE = 'La cámara no entregó una fotografía en 4K. No se guardó una imagen de menor resolución. Solicite al personal revisar la cámara seleccionada, su conexión y su configuración.'
 
 /**
  * Silueta aproximada de la persona en el cuadro capturado (un canal, 0 = fondo, 255 = persona),
@@ -45,4 +57,4 @@ export type ComposeResult =
 
 export type RetakeResult = { ok: true; retakesLeft: number } | { ok: false; error: 'session_invalid' | 'limit_reached' }
 
-export type CameraProblem = 'not_found' | 'permission_denied' | 'in_use' | 'failed' | 'disconnected'
+export type CameraProblem = 'not_found' | 'permission_denied' | 'in_use' | 'failed' | 'disconnected' | 'resolution_unsupported'

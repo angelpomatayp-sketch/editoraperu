@@ -45,6 +45,15 @@ export const characterSlotSchema = z.object({
 })
 export type CharacterSlot = z.infer<typeof characterSlotSchema>
 
+/** Ajuste del cuadro completo del video respecto a su encuadre original. */
+export const characterVideoTransformSchema = z.object({
+  scale: z.number().min(0.1).max(1),
+  x: z.number().min(-0.5).max(0.5),
+  y: z.number().min(-0.5).max(0.5)
+})
+export const characterVideoTransformsSchema = z.record(z.string(), characterVideoTransformSchema)
+export type CharacterVideoTransforms = z.infer<typeof characterVideoTransformsSchema>
+
 export const DEFAULT_CHARACTER_SLOT: CharacterSlot = { x: 0.56, y: 0.42, scale: 0.38 }
 
 /**
@@ -91,6 +100,7 @@ export const campaignConfigSchema = z.object({
   allowCameraBackground: z.boolean().default(false),
   photo: photoRegionSchema.default(DEFAULT_PHOTO_REGION),
   characterSlots: z.array(characterSlotSchema).min(1).max(MAX_CHARACTERS).default([DEFAULT_CHARACTER_SLOT]),
+  characterVideoTransforms: characterVideoTransformsSchema.optional(),
   freePlacement: freePlacementSchema.default(DEFAULT_FREE_PLACEMENT),
   characterAnimation: characterAnimationSchema.default(DEFAULT_CHARACTER_ANIMATION)
 })
@@ -145,6 +155,7 @@ export interface CampaignDetail extends CampaignSummary {
   characterMode: SelectionMode
   characters: CharacterOption[]
   characterSlots: CharacterSlot[]
+  characterVideoTransforms?: CharacterVideoTransforms
   /** Si el participante puede ubicar los personajes a su gusto, y con qué límites. */
   freePlacement: FreePlacement
   characterAnimation: CharacterAnimation

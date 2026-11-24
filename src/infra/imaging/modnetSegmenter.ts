@@ -29,6 +29,12 @@ export class ModnetSegmenter {
   }
 
   /** Carga el modelo por adelantado, para que la primera fotografía no espere la carga. */
+  async dispose(): Promise<void> {
+    const session = this.session
+    this.session = null
+    if (session) await (await session).release()
+  }
+
   async warmUp(): Promise<void> {
     await this.matte(Buffer.alloc(64 * 64 * 3, 128), 64, 64)
   }

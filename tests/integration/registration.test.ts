@@ -61,8 +61,8 @@ describe('registro de participación (RF-REG-004, RF-REG-005, RF-CON-003)', () =
       )
       .all(result.participationId) as { type: string; version: string; body_sha256: string; accepted: number }[]
     expect(evidence.map((e) => [e.type, e.version, e.accepted])).toEqual([
-      ['image_use', '0.1-prueba', 1],
-      ['terms_data', '0.1-prueba', 1]
+      ['image_use', expect.stringMatching(/^1.0-totem-/), 1],
+      ['terms_data', expect.stringMatching(/^1.0-totem-/), 1]
     ])
     expect(evidence.every((e) => /^[0-9a-f]{64}$/.test(e.body_sha256))).toBe(true)
     expect(consents).toHaveLength(2)

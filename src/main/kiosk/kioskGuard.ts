@@ -58,8 +58,8 @@ export function applyKioskGuard(window: BrowserWindow, options: { kiosk: boolean
 }
 
 /** Cierre controlado de la aplicación (RF-KIO-005). */
-export function controlledQuit(audit: AuditLog, actorId: string): void {
-  audit.record({ level: 'info', category: 'kiosk', action: 'controlled_quit', result: 'ok', actor: { type: 'user', id: actorId } })
+export function controlledQuit(audit?: AuditLog, actorId?: string): void {
+  audit?.record({ level: 'info', category: 'kiosk', action: 'controlled_quit', result: 'ok', actor: actorId ? { type: 'user', id: actorId } : { type: 'system' }, detail: { source: actorId ? 'admin' : 'home_confirmation' } })
   allowClose = true
   app.quit()
 }

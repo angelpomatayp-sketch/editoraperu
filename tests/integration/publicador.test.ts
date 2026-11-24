@@ -167,4 +167,20 @@ describe.skipIf(!hasPhp)('servicio de publicación PHP (8.10, sección 20.4)', (
     expect(response.status).toBe(204)
     expect((await fetch(published.url)).status).toBe(404)
   })
+
+  it('la limpieza de respaldo elimina archivos vencidos con tráfico sin depender del cron', async () => {
+    const client = new HttpPublicationClient(baseUrl, SECRET)
+    const id = '77777777-7777-4777-8777-777777777777'
+    const published = await client.upload(id, await photoJpeg())
+    const db = new DatabaseSync(join(dir, 'db.sqlite'))
+    db.prepare("UPDATE photos SET expires_at = '2000-01-01T00:00:00Z' WHERE id = ?").run(id)
+    db.close()
+    writeFileSync(join(dir, '.publicador-cleanup.lock'), '0')
+    const reset = spawnSync(PHP, ['-r', `touch($argv[1], 1);`, join(dir, '.publicador-cleanup.lock')])
+    expect(reset.status).toBe(0)
+    const before = readdirSync(join(dir, 'photos')).length
+    expect((await fetch(`${baseUrl}/api/v1/health`)).ok).toBe(true)
+    expect(readdirSync(join(dir, 'photos'))).toHaveLength(before - 1)
+    expect((await fetch(published.url)).status).toBe(404)
+  })
 })

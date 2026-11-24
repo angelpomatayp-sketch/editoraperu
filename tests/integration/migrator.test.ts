@@ -14,7 +14,7 @@ describe('migraciones (RF-ALM-004)', () => {
   it('crea el esquema inicial completo', () => {
     const db = memoryDb()
     const result = migrate(db, MIGRATIONS)
-    expect(result).toMatchObject({ from: 0, to: 7, applied: ['1_initial', '2_scenario_characters', '3_scenario_photo_hole', '4_character_animation', '5_character_motion', '6_animation_duration', '7_video_background'] })
+    expect(result).toMatchObject({ from: 0, to: 10, applied: ['1_initial', '2_scenario_characters', '3_scenario_photo_hole', '4_character_animation', '5_character_motion', '6_animation_duration', '7_video_background', '8_pose_countdown_20_seconds', '9_pose_countdown_10_seconds', '10_delivery_retention'] })
 
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as {
       name: string
@@ -53,7 +53,7 @@ describe('migraciones (RF-ALM-004)', () => {
     ]
     expect(() => migrate(db, broken)).toThrow()
     expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'temp_ok'").get()).toBeUndefined()
-    expect(migrate(db, MIGRATIONS).to).toBe(7)
+    expect(migrate(db, MIGRATIONS).to).toBe(10)
   })
 
   it('rechaza una base creada por una versión más nueva de la aplicación', () => {

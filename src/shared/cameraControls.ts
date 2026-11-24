@@ -5,8 +5,8 @@ import { z } from 'zod'
  * soporta solo algunos: el panel muestra los que ofrece y se guardan solo los elegidos. Se aplican
  * cada vez que se abre la cámara, para compensar la luz del lugar en el origen.
  */
-export const CAMERA_NUMERIC_CONTROLS = ['brightness', 'contrast', 'saturation', 'sharpness', 'exposureCompensation', 'exposureTime', 'colorTemperature'] as const
-export const CAMERA_MODE_CONTROLS = ['exposureMode', 'whiteBalanceMode'] as const
+export const CAMERA_NUMERIC_CONTROLS = ['brightness', 'contrast', 'saturation', 'sharpness', 'exposureCompensation', 'exposureTime', 'colorTemperature', 'focusDistance'] as const
+export const CAMERA_MODE_CONTROLS = ['exposureMode', 'whiteBalanceMode', 'focusMode'] as const
 export type CameraNumericControl = (typeof CAMERA_NUMERIC_CONTROLS)[number]
 export type CameraModeControl = (typeof CAMERA_MODE_CONTROLS)[number]
 
@@ -18,8 +18,10 @@ export const CAMERA_CONTROL_LABEL: Record<CameraNumericControl | CameraModeContr
   exposureCompensation: 'Compensación de exposición',
   exposureTime: 'Tiempo de exposición (manual)',
   colorTemperature: 'Temperatura de color (manual)',
+  focusDistance: 'Distancia de enfoque (manual)',
   exposureMode: 'Exposición',
-  whiteBalanceMode: 'Balance de blancos'
+  whiteBalanceMode: 'Balance de blancos',
+  focusMode: 'Enfoque'
 }
 
 const mode = z.enum(['manual', 'continuous', 'single-shot'])
@@ -32,8 +34,10 @@ export const cameraControlsSchema = z.object({
   exposureCompensation: z.number().finite().optional(),
   exposureTime: z.number().finite().optional(),
   colorTemperature: z.number().finite().optional(),
+  focusDistance: z.number().finite().optional(),
   exposureMode: mode.optional(),
-  whiteBalanceMode: mode.optional()
+  whiteBalanceMode: mode.optional(),
+  focusMode: mode.optional()
 })
 export type CameraControls = z.infer<typeof cameraControlsSchema>
 
@@ -41,6 +45,7 @@ export type CameraControls = z.infer<typeof cameraControlsSchema>
 export interface ControllableTrack {
   getCapabilities?(): unknown
   getSettings(): unknown
+  getConstraints?(): unknown
   applyConstraints(constraints: { advanced: Record<string, unknown>[] }): Promise<void>
 }
 
@@ -75,6 +80,14 @@ export function currentCameraControls(track: ControllableTrack): CameraControls 
 }
 
 /**
+ * Por defecto no envía ajustes de imagen a la cámara. Al activar el control desde el tótem,
+ * aplica únicamente lo elegido por el operador, sin inventar modos automáticos adicionales.
+ */
+export async function applyConfiguredCameraControls(track: ControllableTrack, controls: CameraControls, enabled = false): Promise<void> {
+  if (enabled) await applyCameraControls(track, controls)
+}
+
+/**
  * Aplica los ajustes guardados que la cámara soporte; los demás se ignoran. Un ajuste rechazado no
  * impide usar la cámara. Los modos van primero: el tiempo de exposición y la temperatura de color
  * solo cuentan en modo manual.
@@ -93,12 +106,17 @@ export async function applyCameraControls(track: ControllableTrack, controls: Ca
     if (value === undefined || !range) continue
     if (key === 'exposureTime' && modes.exposureMode !== 'manual') continue
     if (key === 'colorTemperature' && modes.whiteBalanceMode !== 'manual') continue
+    if (key === 'focusDistance' && modes.focusMode !== 'manual') continue
     values[key] = Math.min(range.max, Math.max(range.min, value))
   }
   for (const set of [modes, values]) {
     if (Object.keys(set).length === 0) continue
     try {
-      await track.applyConstraints({ advanced: [set] })
+      // applyConstraints reemplaza las restricciones anteriores: conservar resolución y FPS,
+      // además de los modos ya aplicados, al cambiar brillo, enfoque o exposición.
+      const previous = (track.getConstraints?.() ?? {}) as { advanced?: Record<string, unknown>[] }
+      const advanced = Object.assign({}, ...(previous.advanced ?? []), set)
+      await track.applyConstraints({ ...previous, advanced: [advanced] })
     } catch {
       // Cámara que rechaza el ajuste: se sigue con su configuración propia.
     }

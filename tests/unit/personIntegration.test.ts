@@ -33,4 +33,15 @@ describe('descontaminación del borde de la persona', () => {
     const opaqueOffset = (12 * width + 12) * 3
     expect([...result.subarray(opaqueOffset, opaqueOffset + 3)]).toEqual([24, 38, 86])
   })
+
+  it('acerca de forma leve brillo y temperatura a los recursos elegidos', () => {
+    const rgb = Buffer.from([100, 100, 120, 100, 100, 120])
+    const alpha = new Uint8Array([255, 255])
+    const result = integratePerson(rgb, alpha, 2, 1, { luminance: 0.6, warmth: 0.15 })
+    expect(result[0]).toBeGreaterThan(100)
+    expect(result[1]).toBeGreaterThan(100)
+    expect(result[2]).toBeGreaterThan(120)
+    // El rojo se acerca al azul: la referencia cálida corrige el sesgo frío sin invertirlo bruscamente.
+    expect(result[2]! - result[0]!).toBeLessThan(20)
+  })
 })

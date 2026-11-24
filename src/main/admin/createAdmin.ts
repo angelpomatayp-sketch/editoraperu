@@ -16,6 +16,7 @@ import { OperationsAdmin } from './operationsAdmin'
 import { ContentAdmin, type FileKind } from './contentAdmin'
 import { SettingsAdmin, type SecretAccess } from './settingsAdmin'
 import { UsersAdmin } from './usersAdmin'
+import { ensureDefaultConsents } from '../defaults/consents'
 
 export interface AdminHost {
   pickFile: (kind: FileKind | 'json') => Promise<string | null>
@@ -64,6 +65,7 @@ export function createAdmin(context: AppContext, host: AdminHost): { api: AdminA
   const devFile = join(context.paths.config, 'publication.dev.json')
 
   const api = new AdminApi({
+    refreshConsents: () => ensureDefaultConsents(context.db, context.settings.get().retention),
     auth,
     operations: new OperationsAdmin({
       repo: operationsRepo,

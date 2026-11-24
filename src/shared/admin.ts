@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { attractSettingsSchema, type AttractSettings } from './attract'
-import { characterAnimationSchema, characterSlotSchema, entryDirectionSchema, freePlacementSchema, photoRegionSchema, selectionModeSchema, type CharacterAnimation, type EntryDirection } from './campaign'
+import { characterAnimationSchema, characterSlotSchema, characterVideoTransformsSchema, entryDirectionSchema, freePlacementSchema, photoRegionSchema, selectionModeSchema, type CharacterAnimation, type CharacterVideoTransforms, type EntryDirection } from './campaign'
 import { cameraControlsSchema } from './cameraControls'
 import type { FractionRect } from './compositionPlan'
 import { BACKGROUND_METHODS, chromaSchema } from './chroma'
@@ -33,6 +33,7 @@ export type Permission =
   /** Ejecutar solicitudes de eliminación de datos (RF-PAR-005). */
   | 'participations.delete'
   | 'publication.retry'
+  | 'publication.qr'
   | 'reports.export'
   /** Bitácora completa; sin este permiso solo se ve la de contenido (vista limitada). */
   | 'audit.view'
@@ -48,6 +49,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'kiosk.exit',
     'participations.view',
     'publication.retry',
+    'publication.qr',
     'reports.export',
     'audit.view',
     'audit.viewContent',
@@ -66,6 +68,7 @@ export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'participations.personal',
     'participations.delete',
     'publication.retry',
+    'publication.qr',
     'reports.export',
     'audit.view',
     'audit.viewContent',
@@ -178,6 +181,7 @@ export const adminInputs = {
     /** Si se omite, se conserva la configuración actual. */
     freePlacement: freePlacementSchema.optional(),
     characterAnimation: characterAnimationSchema.optional(),
+    characterVideoTransforms: characterVideoTransformsSchema.optional(),
     overlays: z.array(z.object({ resourceId: id, x: z.number().min(-0.5).max(1), y: z.number().min(-0.5).max(1), scale: z.number().gt(0).max(1) })).max(10)
   }),
   'resources.add': z.object({
@@ -194,6 +198,7 @@ export const adminInputs = {
     scenarioIds: z.array(id).max(50).optional()
   }),
   'resources.setAnimation': z.object({ campaignId: id, resourceId: id }),
+  'resources.replaceScenarioImage': z.object({ campaignId: id, resourceId: id }),
   'resources.clearAnimation': z.object({ campaignId: id, resourceId: id }),
   'resources.updateMotion': z.object({
     campaignId: id,
@@ -233,7 +238,10 @@ export const adminInputs = {
   }),
   'settings.testPublication': z.object({}),
   'settings.getBackground': z.object({}),
-  'settings.saveBackground': z.object({ method: z.enum(BACKGROUND_METHODS), chroma: chromaSchema, cameraControls: cameraControlsSchema.catch({}) }),
+  'settings.saveBackground': z.object({
+    method: z.enum(BACKGROUND_METHODS), chroma: chromaSchema, cameraControls: cameraControlsSchema.catch({}),
+    cameraControlsEnabled: z.boolean().default(false), matchSceneTone: z.boolean().default(false)
+  }),
 
   'system.quit': z.object({}),
 
@@ -242,6 +250,7 @@ export const adminInputs = {
   'participations.photo': z.object({ photoId: id }),
   'participations.delete': z.object({ id, reason: z.string().trim().min(3, 'Indique el motivo o la referencia de la solicitud').max(300) }),
   'publication.retry': z.object({ photoId: id }),
+  'publication.qr': z.object({ photoId: id }),
 
   'reports.participations': participationFilters,
   'reports.summary': participationFilters,
@@ -336,6 +345,7 @@ export interface AdminCampaign {
   allowCameraBackground: boolean
   photo: z.infer<typeof photoRegionSchema>
   characterSlots: z.infer<typeof characterSlotSchema>[]
+  characterVideoTransforms?: CharacterVideoTransforms
   freePlacement: z.infer<typeof freePlacementSchema>
   characterAnimation: CharacterAnimation
   resources: AdminResource[]
@@ -406,6 +416,8 @@ export interface ParticipationDetail extends ParticipationRow {
     createdAt: string
     publishedAt: string | null
     expiresAt: string | null
+    retentionWarning: string | null
+    localAvailable: boolean
     /** Solo el inicio del token; nunca el token completo (RF-PAR-003). */
     tokenHint: string | null
     queue: { status: string; attempts: number; lastError: string | null } | null
@@ -416,6 +428,12 @@ export interface DeletionResult {
   localPhotosDeleted: number
   remoteDeleted: number
   remotePending: number
+}
+
+export interface AdminPhotoQr {
+  photoId: string
+  qrDataUrl: string
+  expiresAt: string
 }
 
 export interface SummaryRow {

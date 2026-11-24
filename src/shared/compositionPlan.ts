@@ -1,4 +1,4 @@
-import type { CharacterSlot, FreePlacement, PhotoRegion } from './campaign'
+import type { CharacterSlot, CharacterVideoTransforms, FreePlacement, PhotoRegion } from './campaign'
 
 export interface LayerResource {
   id: string
@@ -94,6 +94,12 @@ export interface FramePlacement {
 /** Márgenes del encuadre automático (fracciones de la zona) y ampliación máxima, para cuidar la nitidez. */
 export const AUTO_FRAME = { headroom: 0.07, footroom: 0.02, sideMargin: 0.04, maxUpscale: 2 } as const
 
+/** Altura y línea de apoyo del personaje, en fracciones de la zona del participante. */
+export interface CharacterFrameTarget {
+  height: number
+  baseline: number
+}
+
 /**
  * Encuadre automático: centra a la persona y la agranda hasta ocupar el alto de la zona, de cuerpo
  * entero (pies apoyados abajo y un margen sobre la cabeza), sin superar `maxUpscale` píxeles de salida
@@ -101,33 +107,44 @@ export const AUTO_FRAME = { headroom: 0.07, footroom: 0.02, sideMargin: 0.04, ma
  * `person`: contorno de la persona en fracciones del cuadro (en la orientación de la foto).
  * `regionWidth`/`regionHeight`: tamaño de la zona en píxeles de la imagen final.
  * Las partes que caen fuera del cuadro quedan transparentes (se ve el escenario).
- * Devuelve `null` si el contorno no es útil (sin persona o demasiado pequeña).
+ * Con `target`, permite también reducir y toma la altura y el apoyo del personaje como referencia.
+ * Devuelve `null` si el contorno no es útil; con referencia, también si toca el borde de la cámara.
  */
-export function autoFrame(person: FractionRect, frameWidth: number, frameHeight: number, regionWidth: number, regionHeight: number): FramePlacement | null {
+export function autoFrame(person: FractionRect, frameWidth: number, frameHeight: number, regionWidth: number, regionHeight: number, target?: CharacterFrameTarget | null): FramePlacement | null {
+  if (![frameWidth, frameHeight, regionWidth, regionHeight].every((v) => Number.isFinite(v) && v > 0)) return null
+  if (![person.x, person.y, person.width, person.height].every(Number.isFinite)) return null
   const personWidth = person.width * frameWidth
   const personHeight = person.height * frameHeight
   if (!(personWidth > 0) || personHeight < frameHeight * 0.15) return null
+  // Una silueta cortada no permite comparar alturas completas. No inventar cabeza ni pies.
+  if (target && (person.y <= 0.01 || person.y + person.height >= 0.99 || person.x <= 0.005 || person.x + person.width >= 0.995)) return null
+  if (target && (!Number.isFinite(target.height) || !Number.isFinite(target.baseline) || target.height <= 0 || target.baseline <= AUTO_FRAME.headroom)) return null
 
   const contain = Math.min(regionWidth / frameWidth, regionHeight / frameHeight)
-  const fitHeight = (regionHeight * (1 - AUTO_FRAME.headroom - AUTO_FRAME.footroom)) / personHeight
+  const baseline = target ? Math.min(target.baseline, 1 - AUTO_FRAME.footroom) : 1 - AUTO_FRAME.footroom
+  const height = target ? Math.min(target.height, baseline - AUTO_FRAME.headroom) : 1 - AUTO_FRAME.headroom - AUTO_FRAME.footroom
+  const fitHeight = (regionHeight * height) / personHeight
   const fitWidth = (regionWidth * (1 - 2 * AUTO_FRAME.sideMargin)) / personWidth
-  const scale = Math.max(contain, Math.min(fitHeight, fitWidth, AUTO_FRAME.maxUpscale))
+  const fit = Math.min(fitHeight, fitWidth, AUTO_FRAME.maxUpscale)
+  const scale = target ? fit : Math.max(contain, fit)
 
   // Zona completa expresada en píxeles de la cámara, centrada en la persona y con sus pies abajo.
   const cropWidth = regionWidth / scale
   const cropHeight = regionHeight / scale
   const left = (person.x + person.width / 2) * frameWidth - cropWidth / 2
-  const top = (person.y + person.height) * frameHeight + (AUTO_FRAME.footroom * regionHeight) / scale - cropHeight
+  const top = (person.y + person.height) * frameHeight - (baseline * regionHeight) / scale
 
   const x0 = Math.max(0, left)
   const y0 = Math.max(0, top)
   const x1 = Math.min(frameWidth, left + cropWidth)
   const y1 = Math.min(frameHeight, top + cropHeight)
   if (x1 <= x0 || y1 <= y0) return null
-  return {
+  const placement = {
     crop: { x: x0 / frameWidth, y: y0 / frameHeight, width: (x1 - x0) / frameWidth, height: (y1 - y0) / frameHeight },
     box: { x: (x0 - left) / cropWidth, y: (y0 - top) / cropHeight, width: (x1 - x0) / cropWidth, height: (y1 - y0) / cropHeight }
   }
+  // La vista no debe mostrar una reducción tan pequeña que la foto final rechace su geometría.
+  return target ? sanitizePlacement(placement) : placement
 }
 
 /** Ajusta una ubicación recibida de la interfaz a rangos válidos; `null` si no es utilizable. */
@@ -146,6 +163,7 @@ export function sanitizePlacement(placement: FramePlacement): FramePlacement | n
 
 /** Ubicaciones elegidas por el participante, por orden de personaje; `null` usa la configurada. */
 export interface ChosenPlacements {
+  videoTransforms?: CharacterVideoTransforms
   placements: (CharacterSlot | null)[]
   limits: FreePlacement
   output: OutputSize
@@ -194,11 +212,14 @@ export function placeCharacters(characters: LayerResource[], slots: CharacterSlo
       const fit = Math.min(output.width / c.width, output.height / c.height)
       const width = c.width * fit
       const height = c.height * fit
+      const transform = chosen?.videoTransforms?.[c.id]
+      const scale = transform?.scale ?? 1
       return {
         ...c,
-        posX: (output.width - width) / 2 / output.width,
-        posY: (output.height - height) / 2 / output.height,
-        scale: width / output.width
+        // Reducir conserva el centro horizontal y el apoyo inferior del cuadro original.
+        posX: (output.width - width * scale) / 2 / output.width + (transform?.x ?? 0),
+        posY: ((output.height - height) / 2 + height * (1 - scale)) / output.height + (transform?.y ?? 0),
+        scale: width / output.width * scale
       }
     }
     const custom = chosen?.limits.enabled ? chosen.placements[i] : null

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import type { ImageSegmenter } from '@mediapipe/tasks-vision'
 import type { PersonGuide } from '../../../../shared/capture'
-import { autoFrame, placeFrame, type FractionRect, type FramePlacement } from '../../../../shared/compositionPlan'
+import { BufferedVideo } from './BufferedVideo'
+import { autoFrame, placeFrame, type CharacterFrameTarget, type FractionRect, type FramePlacement } from '../../../../shared/compositionPlan'
 
 /** Motor y modelo incluidos con la aplicación; se sirven sin Internet por el protocolo interno. */
 const WASM_BASE = 'totem-media://app/vendor/mediapipe/wasm'
@@ -109,12 +110,16 @@ const blend = (from: FractionRect, to: FractionRect, k: number): FractionRect =>
 })
 
 interface SegmentationVideoProps {
+  frozen?: boolean
   videoRef: RefObject<HTMLVideoElement | null>
   mirror: boolean
   /** Encuadre fijo, de 0 (imagen completa) a 1 (llenar el recuadro, por defecto). */
   framing?: number
   /** Encuadre automático de la persona; requiere `regionPx`. */
   autoFraming?: boolean
+  characterTarget?: CharacterFrameTarget | null
+  /** Fija únicamente la geometría; la persona puede seguir moviéndose en el video. */
+  lockFraming?: boolean
   /** Tamaño de la zona de la persona en píxeles de la imagen final (para limitar la ampliación). */
   regionPx?: { width: number; height: number }
   /** Recibe el encuadre automático en uso (o `null` si se usa el fijo), para aplicarlo a la foto. */
@@ -130,15 +135,18 @@ interface SegmentationVideoProps {
  * Es una aproximación rápida: la fotografía final se recorta con un modelo de mayor calidad (MODNet).
  * Si el modelo no carga, se muestra la cámara sin recortar.
  */
-export function SegmentationVideo({ videoRef, mirror, framing, autoFraming, regionPx, onPlacement, onPresence, onReady }: SegmentationVideoProps): React.JSX.Element {
+export function SegmentationVideo({ videoRef, mirror, framing, autoFraming, characterTarget, lockFraming, regionPx, onPlacement, onPresence, onReady, frozen = false }: SegmentationVideoProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [failed, setFailed] = useState(false)
+  const frozenRef = useRef(frozen)
+  frozenRef.current = frozen
   // Los ajustes se leen en cada cuadro sin reiniciar el ciclo de dibujo.
-  const options = useRef({ framing, autoFraming, regionPx, onPlacement, onPresence, onReady })
-  options.current = { framing, autoFraming, regionPx, onPlacement, onPresence, onReady }
+  const options = useRef({ framing, autoFraming, characterTarget, lockFraming, regionPx, onPlacement, onPresence, onReady })
+  options.current = { framing, autoFraming, characterTarget, lockFraming, regionPx, onPlacement, onPresence, onReady }
 
   useEffect(() => {
     let smoothed: FractionRect | null = null
+    let lastPlacement: FramePlacement | null = null
     let lastSeen = 0
     let present: boolean | null = null
     let frame = 0
@@ -156,6 +164,7 @@ export function SegmentationVideo({ videoRef, mirror, framing, autoFraming, regi
         const draw = () => {
           if (cancelled) return
           frame = requestAnimationFrame(draw)
+          if (frozenRef.current) return
           const video = videoRef.current
           const canvas = canvasRef.current
           if (!video || !canvas || video.readyState < 2 || !video.videoWidth) return
@@ -194,7 +203,7 @@ export function SegmentationVideo({ videoRef, mirror, framing, autoFraming, regi
 
           const vw = video.videoWidth
           const vh = video.videoHeight
-          const { framing: fixed = 1, autoFraming: auto, regionPx: region, onPlacement: report } = options.current
+          const { framing: fixed = 1, autoFraming: auto, characterTarget: target, lockFraming: locked, regionPx: region, onPlacement: report } = options.current
 
           // Contorno de la persona en la orientación de la foto (en espejo si corresponde), suavizado.
           if (detected) {
@@ -213,7 +222,11 @@ export function SegmentationVideo({ videoRef, mirror, framing, autoFraming, regi
 
           // Mismo encuadre que la foto final: automático si hay persona; si no, el fijo configurado.
           const regionSize = region ?? { width, height }
-          const automatic = auto && region && smoothed ? autoFrame(smoothed, vw, vh, regionSize.width, regionSize.height) : null
+          // La referencia usa la pose final, no la animación de entrada. Al final de la cuenta se
+          // conserva el último ajuste visible: no cambia el tamaño mientras se dispara la cámara.
+          const automatic = locked && lastPlacement ? lastPlacement
+            : auto && region && smoothed ? autoFrame(smoothed, vw, vh, regionSize.width, regionSize.height, target) : null
+          lastPlacement = automatic
           report?.(automatic)
           const { crop, box } = automatic ?? placeFrame(vw, vh, regionSize.width, regionSize.height, fixed)
 
@@ -250,6 +263,7 @@ export function SegmentationVideo({ videoRef, mirror, framing, autoFraming, regi
         if (!cancelled) {
           // El modo de respaldo muestra el video original; también debe liberar su reproducción.
           options.current.onReady?.()
+          options.current.onPlacement?.(null)
           setFailed(true)
         }
       })
@@ -257,16 +271,10 @@ export function SegmentationVideo({ videoRef, mirror, framing, autoFraming, regi
     return () => {
       cancelled = true
       cancelAnimationFrame(frame)
+      options.current.onPlacement?.(null)
     }
   }, [videoRef, mirror])
 
-  const fallbackRef = useRef<HTMLVideoElement | null>(null)
-  useEffect(() => {
-    if (!failed || !fallbackRef.current || !videoRef.current) return
-    if (videoRef.current.srcObject) fallbackRef.current.srcObject = videoRef.current.srcObject
-    else fallbackRef.current.src = videoRef.current.currentSrc || videoRef.current.src
-  }, [failed, videoRef])
-
-  if (failed) return <video ref={fallbackRef} autoPlay muted playsInline className={`chroma-video${mirror ? ' mirrored' : ''}`} />
+  if (failed) return <BufferedVideo videoRef={videoRef} mirror={mirror} frozen={frozen} />
   return <canvas ref={canvasRef} className="chroma-video" />
 }

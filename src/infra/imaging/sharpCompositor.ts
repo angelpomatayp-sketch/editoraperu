@@ -5,7 +5,7 @@ import sharp from './sharpSetup'
 import type { BackgroundRemoval, Compositor, StoredImage } from '../../core/capture/captureService'
 import { applyChromaKey } from '../../shared/chroma'
 import { guidedMatte } from './guidedMatte'
-import { contactShadow, integratePerson } from './personIntegration'
+import { contactShadow, integratePerson, type PhotoTone } from './personIntegration'
 import { refineMatte } from './refineMatte'
 import { placeFrame, sanitizePlacement, type FramePlacement, type OutputSize, type PlannedLayer } from '../../shared/compositionPlan'
 
@@ -14,16 +14,18 @@ const MAX_SVG_DENSITY = 2400
 
 /** Recorte automático de la persona: máscara de un canal del tamaño de la imagen RGB. */
 export interface PersonSegmenter {
+  readonly independentMatte?: boolean
   matte(rgb: Buffer, width: number, height: number): Promise<Buffer>
 }
 
-interface CompositorOptions {
+export interface CompositorOptions {
   dataRoot: string
   contentDir: string
   output: OutputSize & { jpegQuality: number }
   segmenter?: PersonSegmenter | null
   /** Aviso cuando el recorte falla y la foto se compone completa. */
   onWarning?: (message: string, error: unknown) => void
+  onTiming?: (stage: string, milliseconds: number) => void
 }
 
 /**
@@ -46,11 +48,14 @@ export class SharpCompositor implements Compositor {
     const { width, height, jpegQuality } = this.options.output
     const overlays: OverlayOptions[] = []
     const sceneLayer = plan.find((layer) => layer.kind === 'fill' && layer.resource.type === 'scenario')
-    const sceneLuma = sceneLayer?.kind === 'fill' ? await this.averageLuminance(sceneLayer.resource.src) : undefined
+    const characterPaths = plan.flatMap((layer) => layer.kind === 'placed' && layer.resource.type === 'character' ? [layer.resource.src] : [])
+    const referenceTone = removal?.matchSceneTone
+      ? await this.referenceTone(sceneLayer?.kind === 'fill' ? sceneLayer.resource.src : undefined, characterPaths)
+      : undefined
 
     for (const layer of plan) {
       if (layer.kind === 'photo') {
-        const person = await this.person(originalPath, layer.width, layer.height, removal, framing, frame, backdrop, sceneLuma)
+        const person = await this.person(originalPath, layer.width, layer.height, removal, framing, frame, backdrop, referenceTone, sceneLayer !== undefined)
         if (person.shadow) {
           overlays.push(...(await this.clip(person.shadow.input, layer.left + person.left + person.shadow.left, layer.top + person.top + person.shadow.top, person.shadow.width, person.shadow.height)))
         }
@@ -62,25 +67,25 @@ export class SharpCompositor implements Compositor {
           .flatten({ background: '#ffffff' })
           .blur(Math.max(8, width / 30))
           .modulate({ brightness: 0.92 })
-          .png()
+          .png({ compressionLevel: 1 })
           .toBuffer()
         overlays.push({ input, left: 0, top: 0 })
       } else if (layer.kind === 'fill' && layer.box) {
         // Escenario de otra proporción: completo, sin recortarlo.
         const w = Math.max(1, Math.round(layer.box.width * width))
         const h = Math.max(1, Math.round(layer.box.height * height))
-        const input = await (await this.load(layer.resource.src, w)).resize(w, h, { fit: 'fill', kernel: 'lanczos3' }).png().toBuffer()
+        const input = await (await this.load(layer.resource.src, w)).resize(w, h, { fit: 'fill', kernel: 'lanczos3' }).png({ compressionLevel: 1 }).toBuffer()
         overlays.push(...(await this.clip(input, Math.round(layer.box.x * width), Math.round(layer.box.y * height), w, h)))
       } else if (layer.kind === 'fill') {
         const input = await (await this.load(layer.resource.src, width))
           .resize(width, height, { fit: 'cover', position: 'centre' })
-          .png()
+          .png({ compressionLevel: 1 })
           .toBuffer()
         overlays.push({ input, left: 0, top: 0 })
       } else {
         const input = await (await this.load(layer.resource.src, layer.width))
           .resize(layer.width, layer.height, { fit: 'fill' })
-          .png()
+          .png({ compressionLevel: 1 })
           .toBuffer()
         overlays.push(...(await this.clip(input, layer.left, layer.top, layer.width, layer.height)))
       }
@@ -116,7 +121,8 @@ export class SharpCompositor implements Compositor {
     framing: number,
     frame: FramePlacement | null,
     backdrop = false,
-    sceneLuma?: number
+    referenceTone?: PhotoTone,
+    hasScene = false
   ): Promise<{ input: Buffer; left: number; top: number; width: number; height: number; shadow?: Awaited<ReturnType<typeof contactShadow>> }> {
     const source = sharp(join(this.options.dataRoot, originalPath)).rotate()
     const { width: frameWidth = regionWidth, height: frameHeight = regionHeight } = await source.clone().metadata()
@@ -138,7 +144,9 @@ export class SharpCompositor implements Compositor {
     const resized = source.extract(extract).resize(width, height, { fit: 'fill', kernel: upscaling ? 'mitchell' : 'lanczos3' })
 
     if (!removal) {
-      const input = await resized.toBuffer()
+      // Intermedio sin pérdida: toBuffer() sobre JPEG heredaba calidad y submuestreo por defecto.
+      // El único JPEG de esta composición debe ser el archivo final (95, 4:4:4).
+      const input = await resized.png({ compressionLevel: 1 }).toBuffer()
       const covered = place.left <= 0 && place.top <= 0 && place.width >= regionWidth && place.height >= regionHeight
       if (!backdrop || covered) return { ...place, input }
       // Zona transparente de un escenario: la foto sin zoom y, alrededor, la misma foto ampliada y
@@ -149,7 +157,7 @@ export class SharpCompositor implements Compositor {
         .blur(Math.max(8, regionWidth / 40))
         .modulate({ brightness: 0.85 })
         .composite([{ input, left: place.left, top: place.top }])
-        .png()
+        .png({ compressionLevel: 1 })
         .toBuffer()
       return { input: filled, left: 0, top: 0, width: regionWidth, height: regionHeight }
     }
@@ -157,38 +165,100 @@ export class SharpCompositor implements Compositor {
     if (removal.method === 'chroma') {
       const { data, info } = await resized.ensureAlpha().raw().toBuffer({ resolveWithObject: true })
       applyChromaKey(data, removal.chroma)
-      return { ...place, input: await sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } }).png().toBuffer() }
+      const pixels = info.width * info.height
+      const rgb = Buffer.allocUnsafe(pixels * 3)
+      const alpha = new Uint8Array(pixels)
+      for (let i = 0; i < pixels; i++) {
+        rgb[i * 3] = data[i * 4]!
+        rgb[i * 3 + 1] = data[i * 4 + 1]!
+        rgb[i * 3 + 2] = data[i * 4 + 2]!
+        alpha[i] = data[i * 4 + 3]!
+      }
+      const integrated = integratePerson(rgb, alpha, info.width, info.height, referenceTone)
+      for (let i = 0; i < pixels; i++) {
+        data[i * 4] = integrated[i * 3]!
+        data[i * 4 + 1] = integrated[i * 3 + 1]!
+        data[i * 4 + 2] = integrated[i * 3 + 2]!
+      }
+      return { ...place, input: await sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } }).png({ compressionLevel: 1 }).toBuffer() }
     }
 
     const { data, info } = await resized.removeAlpha().raw().toBuffer({ resolveWithObject: true })
     try {
       if (!this.options.segmenter) throw new Error('Modelo de recorte no disponible')
+      let started = performance.now()
       const fine = await this.options.segmenter.matte(data, info.width, info.height)
-      const guided = removal.guide ? await guidedMatte(fine, removal.guide, info.width, info.height, crop) : fine
+      this.options.onTiming?.('matte', performance.now() - started)
+      const guided = removal.guide && !this.options.segmenter.independentMatte
+        ? await guidedMatte(fine, removal.guide, info.width, info.height, crop) : fine
       // Bordes finos a resolución completa (cabello, brazos) y sin halos del fondo.
+      started = performance.now()
       const alpha = refineMatte(guided, data, info.width, info.height)
-      const integrated = integratePerson(data, alpha, info.width, info.height, sceneLuma)
+      this.options.onTiming?.('refine', performance.now() - started)
+      started = performance.now()
+      const integrated = integratePerson(data, alpha, info.width, info.height, referenceTone)
+      this.options.onTiming?.('integration', performance.now() - started)
       const input = await sharp(integrated, { raw: { width: info.width, height: info.height, channels: 3 } })
         .joinChannel(alpha, { raw: { width: info.width, height: info.height, channels: 1 } })
-        .png()
+        .png({ compressionLevel: 1 })
         .toBuffer()
-      const shadow = sceneLuma === undefined ? null : await contactShadow(alpha, info.width, info.height)
+      const shadow = !hasScene ? null : await contactShadow(alpha, info.width, info.height)
       return { ...place, input, ...(shadow ? { shadow } : {}) }
     } catch (error) {
       // Mejor una foto con su fondo que ninguna foto: se compone completa y se avisa.
       this.options.onWarning?.('segmentation_failed', error)
-      return { ...place, input: await sharp(data, { raw: { width: info.width, height: info.height, channels: 3 } }).png().toBuffer() }
+      return { ...place, input: await sharp(data, { raw: { width: info.width, height: info.height, channels: 3 } }).png({ compressionLevel: 1 }).toBuffer() }
     }
   }
 
-  /** Luminancia media reducida del escenario para una igualación global muy moderada. */
-  private async averageLuminance(relativePath: string): Promise<number | undefined> {
+  /** Color medio visible de un recurso; la transparencia no contamina la medición. */
+  private async averageTone(relativePath: string): Promise<PhotoTone | undefined> {
     try {
-      const { data, info } = await (await this.load(relativePath, 1)).resize(1, 1).removeAlpha().raw().toBuffer({ resolveWithObject: true })
-      if (info.channels < 3) return undefined
-      return (0.2126 * data[0]! + 0.7152 * data[1]! + 0.0722 * data[2]!) / 255
+      const { data, info } = await (await this.load(relativePath, 32)).resize(32, 32, { fit: 'inside' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
+      let red = 0
+      let green = 0
+      let blue = 0
+      let weight = 0
+      for (let i = 0; i < info.width * info.height; i++) {
+        const alpha = data[i * 4 + 3]! / 255
+        if (alpha <= 0.02) continue
+        red += data[i * 4]! * alpha
+        green += data[i * 4 + 1]! * alpha
+        blue += data[i * 4 + 2]! * alpha
+        weight += alpha
+      }
+      if (weight === 0) return undefined
+      red /= weight
+      green /= weight
+      blue /= weight
+      return {
+        luminance: (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255,
+        warmth: (red - blue) / 255
+      }
     } catch {
       return undefined
+    }
+  }
+
+  /**
+   * El escenario domina la referencia y los personajes elegidos aportan hasta 25 % del acabado.
+   * Sin escenario (fondo real), los personajes son la única referencia visual disponible.
+   */
+  private async referenceTone(scenePath: string | undefined, characterPaths: string[]): Promise<PhotoTone | undefined> {
+    const [scene, ...characters] = await Promise.all([
+      scenePath ? this.averageTone(scenePath) : Promise.resolve(undefined),
+      ...characterPaths.map((path) => this.averageTone(path))
+    ])
+    const usableCharacters = characters.filter((tone): tone is PhotoTone => tone !== undefined)
+    const character = usableCharacters.length === 0 ? undefined : {
+      luminance: usableCharacters.reduce((sum, tone) => sum + tone.luminance, 0) / usableCharacters.length,
+      warmth: usableCharacters.reduce((sum, tone) => sum + tone.warmth, 0) / usableCharacters.length
+    }
+    if (!scene) return character
+    if (!character) return scene
+    return {
+      luminance: scene.luminance * 0.75 + character.luminance * 0.25,
+      warmth: scene.warmth * 0.75 + character.warmth * 0.25
     }
   }
 

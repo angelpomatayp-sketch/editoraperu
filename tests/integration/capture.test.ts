@@ -12,12 +12,12 @@ let app: ReturnType<typeof seededApp>
 afterEach(() => app?.cleanup())
 
 /**
- * Captura simulada como la de una cámara: fondo verde de croma y una "persona" roja de 300 x 500
+ * Captura UHD simulada como la de una cámara: fondo verde de croma y una "persona" roja de 900 x 1500
  * en el centro.
  */
-async function cameraJpeg(width = 1280, height = 720): Promise<Uint8Array> {
-  const person = Math.min(300, width / 3)
-  const personHeight = Math.min(500, (height * 2) / 3)
+async function cameraJpeg(width = 3840, height = 2160): Promise<Uint8Array> {
+  const person = Math.min(900, width / 3)
+  const personHeight = Math.min(1500, (height * 2) / 3)
   const buffer = await sharp({ create: { width, height, channels: 3, background: '#00b140' } })
     .composite([
       {
@@ -68,7 +68,7 @@ describe('captura y composición (8.7, 8.8)', () => {
     expect(participationStatus(participationId)).toBe('composed')
 
     const [original, final] = photos()
-    expect(original).toMatchObject({ kind: 'original', status: 'captured', width: 1280, height: 720 })
+    expect(original).toMatchObject({ kind: 'original', status: 'captured', width: 3840, height: 2160 })
     expect(final).toMatchObject({ kind: 'final', status: 'composed', width: OUTPUT.width, height: OUTPUT.height })
 
     // Los nombres de archivo son identificadores aleatorios, sin datos del participante (RF-CMP-005).
@@ -166,7 +166,7 @@ describe('captura y composición (8.7, 8.8)', () => {
       settings: { ...DEFAULT_SETTINGS, background: { method: 'none' }, capture: { ...DEFAULT_SETTINGS.capture, framingPercent: 0 } }
     })
     const { sessionId } = app.registerParticipant()
-    await app.capture.saveCapture(sessionId, await cameraJpeg(1280, 720))
+    await app.capture.saveCapture(sessionId, await cameraJpeg(3840, 2160))
     await app.capture.compose(sessionId)
     const final = photos().find((p) => p.kind === 'final')!
     // Zona de la persona del escenario de prueba: x 0.12–0.88, y 0.2–0.865 (en 1080×1920).
@@ -210,7 +210,7 @@ describe('captura y composición (8.7, 8.8)', () => {
 
     const { sessionId, detail } = app.registerParticipant('DEMO-BICENTENARIO')
     expect(detail.scenarios[0]!.photoHole).toEqual(detected)
-    await app.capture.saveCapture(sessionId, await cameraJpeg(1280, 720))
+    await app.capture.saveCapture(sessionId, await cameraJpeg(3840, 2160))
     expect((await app.capture.compose(sessionId)).ok).toBe(true)
     const final = join(app.paths.root, photos().find((p) => p.kind === 'final')!.file_path!)
 
@@ -253,6 +253,21 @@ describe('captura y composición (8.7, 8.8)', () => {
     app = seededApp()
     const { sessionId } = app.registerParticipant()
     expect(await app.capture.saveCapture(sessionId, await cameraJpeg(200, 150))).toMatchObject({ error: 'invalid_image' })
+  })
+
+  it.each([[1920, 1080], [1080, 1920], [3840, 2159], [3000, 3000]])('no guarda ni compone un original %i × %i inferior a UHD', async (width, height) => {
+    app = seededApp()
+    const { sessionId, participationId } = app.registerParticipant()
+    expect(await app.capture.saveCapture(sessionId, await cameraJpeg(width, height))).toMatchObject({ ok: false, error: 'resolution_unsupported' })
+    expect(photos()).toEqual([])
+    expect(readdirSync(app.paths.originals)).toEqual([])
+    expect(readdirSync(app.paths.tmp)).toEqual([])
+    expect(participationStatus(participationId)).toBe('registered')
+    expect(await app.capture.compose(sessionId)).toMatchObject({ ok: false, error: 'no_capture' })
+    const event = app.db.prepare("SELECT detail_json FROM audit_events WHERE action = 'capture.save' AND result = 'fail'").get() as { detail_json: string }
+    expect(JSON.parse(event.detail_json)).toMatchObject({ reason: 'resolution_unsupported', width, height })
+    // Corregir la cámara permite reintentar; nunca se sustituyó el original por uno ampliado.
+    expect(await app.capture.saveCapture(sessionId, await cameraJpeg())).toEqual({ ok: true })
   })
 
   it('no captura sin espacio en disco (RF-ALM-002)', async () => {
@@ -339,7 +354,7 @@ describe('captura y composición (8.7, 8.8)', () => {
     const { sessionId } = app.registerParticipant('DEMO-BICENTENARIO', (input) => {
       input.selections.characterIds = []
     })
-    await app.capture.saveCapture(sessionId, await cameraJpeg(720, 1280))
+    await app.capture.saveCapture(sessionId, await cameraJpeg(2160, 3840))
     expect((await app.capture.compose(sessionId)).ok).toBe(true)
   })
 })

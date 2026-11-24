@@ -236,6 +236,16 @@ export class AdminContentRepository {
     this.db.prepare('UPDATE resources SET name = ?, status = ?, updated_at = ? WHERE id = ?').run(name, status, now, id)
   }
 
+  /** Sustituye solo la imagen; conserva identidad, estado, ubicación y asociaciones. */
+  replaceScenarioImage(id: string, image: { filePath: string; format: string; width: number; height: number; sizeBytes: number }, hole: FractionRect | null, now: string): void {
+    this.db.prepare(`UPDATE resources SET file_path = ?, format = ?, width = ?, height = ?, size_bytes = ?,
+      photo_hole_json = ?, photo_hole_checked = 1, updated_at = ? WHERE id = ? AND type = 'scenario'`)
+      .run(image.filePath, image.format, image.width, image.height, image.sizeBytes, hole ? JSON.stringify(hole) : null, now, id)
+    this.db.prepare(`UPDATE campaigns SET config_version = config_version + 1, updated_at = ?
+      WHERE id IN (SELECT campaign_id FROM campaign_resources WHERE resource_id = ?)`)
+      .run(now, id)
+  }
+
   setCharacterAnimation(
     id: string,
     filePath: string | null,

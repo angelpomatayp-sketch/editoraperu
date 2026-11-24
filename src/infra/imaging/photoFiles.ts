@@ -3,7 +3,8 @@ import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Metadata } from 'sharp'
 import sharp from './sharpSetup'
-import { InvalidImageError, type PhotoFiles, type StoredImage } from '../../core/capture/captureService'
+import { InsufficientResolutionError, InvalidImageError, type PhotoFiles, type StoredImage } from '../../core/capture/captureService'
+import { is4kCapture } from '../../shared/capture'
 import { MAX_CAPTURE_BYTES } from '../../shared/composition'
 
 const MIN_CAPTURE_SIDE = 320
@@ -28,6 +29,7 @@ export class FsPhotoFiles implements PhotoFiles {
     }
     if (meta.format !== 'jpeg' || !meta.width || !meta.height) throw new InvalidImageError('Formato inesperado')
     if (Math.min(meta.width, meta.height) < MIN_CAPTURE_SIDE) throw new InvalidImageError('Resolución insuficiente')
+    if (!is4kCapture(meta.width, meta.height)) throw new InsufficientResolutionError(meta.width, meta.height)
 
     const filePath = `photos/originals/${photoId}.jpg`
     const temp = join(this.dataRoot, 'tmp', `${photoId}.jpg.part`)

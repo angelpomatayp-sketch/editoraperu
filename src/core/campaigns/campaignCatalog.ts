@@ -221,6 +221,7 @@ export class CampaignCatalog {
       characterMode: config.characterMode,
       characters: config.characterMode === 'none' ? [] : characters,
       characterSlots: config.characterSlots,
+      characterVideoTransforms: config.characterVideoTransforms,
       freePlacement: config.freePlacement,
       characterAnimation: config.characterAnimation,
       frameMode: config.frameMode,

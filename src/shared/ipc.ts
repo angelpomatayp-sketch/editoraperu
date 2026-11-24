@@ -26,6 +26,7 @@ export const IPC = {
   reportCameraProblem: 'camera:report-problem',
   publish: 'publication:publish',
   reservedGesture: 'kiosk:reserved-gesture',
+  confirmQuit: 'kiosk:confirm-quit',
   adminStatus: 'admin:status',
   adminSetup: 'admin:setup',
   adminLogin: 'admin:login',
@@ -64,10 +65,13 @@ export interface PublicSettings {
     framingPercent: number
     /** Encuadre automático de la persona (con recorte automático del fondo). */
     autoFraming: boolean
+    /** Altura visual y apoyo similares al primer personaje seleccionado (solo recorte automático). */
+    matchCharacterSize: boolean
     /** Cámara montada girada: grados para enderezar la imagen (0, 90, 180 o 270). */
     rotation: number
     /** Aviso grande «Ubíquese aquí» hasta que alguien se ubique. */
     positionHint: boolean
+    cameraControlsEnabled: boolean
     cameraControls: CameraControls
     maxRetakes: number
   }
@@ -125,6 +129,7 @@ export interface TotemApi {
   publish(sessionId: string): Promise<PublishResult>
   /** Registra la acción reservada; la interfaz abre el acceso administrativo (RF-KIO-003). */
   reservedGesture(): Promise<void>
+  confirmQuit(confirmed: true): Promise<void>
   adminStatus(): Promise<AdminStatus>
   adminSetup(payload: { username: string; displayName: string; password: string }): Promise<SetupResult>
   adminLogin(payload: { username: string; password: string }): Promise<LoginResult>

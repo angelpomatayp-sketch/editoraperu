@@ -34,6 +34,9 @@ export const DEFAULT_CHROMA: ChromaSettings = {
   spill: 0.6
 }
 
+/** Verde digital del personaje: transición más amplia y descontaminación completa. */
+export const CHARACTER_CHROMA: ChromaSettings = { ...DEFAULT_CHROMA, similarity: 0.22, smoothness: 0.12, spill: 1 }
+
 /** Color verde dominante del borde de una imagen y proporción de borde que ocupa. */
 export interface DetectedGreenScreen {
   keyColor: string
@@ -116,5 +119,35 @@ export function applyChromaKey(pixels: Uint8Array | Uint8ClampedArray, settings:
     // Reflejo verde: el verde no puede superar mucho al mayor de rojo y azul.
     const limit = Math.max(r, b)
     if (g > limit) pixels[i + 1] = Math.round(limit + (g - limit) * (1 - spill))
+  }
+}
+
+/** Limpia únicamente el color contaminado del contorno del personaje, sin erosionar su alfa. */
+export function applyCharacterChromaKey(pixels: Uint8Array | Uint8ClampedArray, width: number, height: number, keyColor: string): void {
+  const original = new Uint8Array(pixels)
+  applyChromaKey(pixels, { ...CHARACTER_CHROMA, keyColor })
+  const keyed = new Uint8Array(pixels)
+  const directions = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]] as const
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const i = (y * width + x) * 4
+    if (!keyed[i + 3] || original[i + 1]! <= Math.max(original[i]!, original[i + 2]!) + 2) continue
+    const boundary = keyed[i + 3]! < 255 || directions.some(([dx, dy]) => {
+      const nx = x + dx * 2, ny = y + dy * 2
+      return nx >= 0 && nx < width && ny >= 0 && ny < height && keyed[(ny * width + nx) * 4 + 3]! < 128
+    })
+    if (!boundary) continue
+    // Buscar color sólido cercano evita convertir el verde residual en una línea gris/amarilla.
+    let best = -1
+    for (const distance of [3, 6, 9, 12]) {
+      for (const [dx, dy] of directions) {
+        const nx = x + dx * distance, ny = y + dy * distance
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue
+        const j = (ny * width + nx) * 4
+        if (keyed[j + 3] === 255 && original[j + 1]! <= Math.max(original[j]!, original[j + 2]!) + 2) { best = j; break }
+      }
+      if (best >= 0) break
+    }
+    if (best >= 0) for (let channel = 0; channel < 3; channel++) pixels[i + channel] = keyed[best + channel]!
+    else pixels[i + 1] = Math.round((pixels[i]! + pixels[i + 2]!) / 2)
   }
 }

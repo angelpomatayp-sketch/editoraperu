@@ -336,7 +336,7 @@ await scenario('E2E-10', 'Panel administrativo: acceso, error de contraseña, se
   try {
     const { page } = app
     await page.waitFor(`document.querySelector('.reserved-corner')`, 20_000)
-    for (let i = 0; i < 5; i++) await page.clickAt(30, 30)
+    await page.click('.home-control--admin')
     await page.waitText('Configuración inicial')
     await page.fill('.aform input', 0, 'admin')
     await page.fill('.aform input', 1, 'Administración')
@@ -351,7 +351,7 @@ await scenario('E2E-10', 'Panel administrativo: acceso, error de contraseña, se
     }
     await page.click('button', 'Cerrar sesión')
     await page.waitFor(`document.querySelector('main.attract')`, 5000)
-    for (let i = 0; i < 5; i++) await page.clickAt(30, 30)
+    await page.click('.home-control--admin')
     await page.waitText('Acceso administrativo')
     await page.fill('.aform input', 0, 'admin')
     await page.fill('.aform input', 1, 'clave-equivocada')

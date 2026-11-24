@@ -5,6 +5,13 @@ const clamp = (value: number, min: number, max: number): number => Math.min(max,
 /** Luminancia sRGB aproximada, suficiente para una corrección fotográfica deliberadamente leve. */
 const luminance = (r: number, g: number, b: number): number => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
 
+/** Referencia visual calculada de los recursos elegidos, siempre en rangos normalizados. */
+export interface PhotoTone {
+  luminance: number
+  /** Positivo = cálido (más rojo); negativo = frío (más azul). */
+  warmth: number
+}
+
 /**
  * Integra el recorte con el escenario sin reinterpretar la fotografía:
  * - acerca suavemente la luminosidad de la persona a la del escenario;
@@ -12,29 +19,36 @@ const luminance = (r: number, g: number, b: number): number => (0.2126 * r + 0.7
  *   cercanos de la propia persona (descontaminación de borde).
  * Los píxeles opacos —rostro, ropa y piel— conservan sus colores salvo la corrección global limitada.
  */
-export function integratePerson(rgb: Buffer, alpha: Uint8Array, width: number, height: number, sceneLuma?: number): Buffer {
+export function integratePerson(rgb: Buffer, alpha: Uint8Array, width: number, height: number, tone?: PhotoTone): Buffer {
   const output = Buffer.from(rgb)
   let sum = 0
+  let red = 0
+  let blue = 0
   let count = 0
   const sampleStep = Math.max(1, Math.floor((width * height) / 300_000))
   for (let i = 0; i < alpha.length; i += sampleStep) {
     if (alpha[i]! < 224) continue
     sum += luminance(rgb[i * 3]!, rgb[i * 3 + 1]!, rgb[i * 3 + 2]!)
+    red += rgb[i * 3]!
+    blue += rgb[i * 3 + 2]!
     count++
   }
 
-  if (count > 0 && sceneLuma !== undefined) {
+  if (count > 0 && tone) {
     const personLuma = sum / count
-    const desired = clamp(sceneLuma, 0.28, 0.72)
+    const desired = clamp(tone.luminance, 0.28, 0.72)
     // Solo se recorre el 30 % de la diferencia y nunca se altera más de ±14 %.
     const brightness = clamp(1 + (desired / Math.max(0.08, personLuma) - 1) * 0.3, 0.88, 1.14)
-    if (Math.abs(brightness - 1) > 0.005) {
+    // Temperatura deliberadamente sutil: acerca la persona al ambiente/personajes sin falsear piel.
+    const personWarmth = (red / count - blue / count) / 255
+    const warmth = clamp((clamp(tone.warmth, -0.18, 0.18) - personWarmth) * 0.18, -0.035, 0.035)
+    if (Math.abs(brightness - 1) > 0.005 || Math.abs(warmth) > 0.002) {
       for (let i = 0; i < alpha.length; i++) {
         if (alpha[i]! <= 8) continue
         const offset = i * 3
-        output[offset] = clamp(Math.round(output[offset]! * brightness), 0, 255)
+        output[offset] = clamp(Math.round(output[offset]! * brightness * (1 + warmth)), 0, 255)
         output[offset + 1] = clamp(Math.round(output[offset + 1]! * brightness), 0, 255)
-        output[offset + 2] = clamp(Math.round(output[offset + 2]! * brightness), 0, 255)
+        output[offset + 2] = clamp(Math.round(output[offset + 2]! * brightness * (1 - warmth)), 0, 255)
       }
     }
   }

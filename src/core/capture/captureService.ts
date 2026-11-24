@@ -34,6 +34,13 @@ export class InvalidImageError extends Error {
   }
 }
 
+export class InsufficientResolutionError extends InvalidImageError {
+  constructor(readonly width: number, readonly height: number) {
+    super(`Se requiere una captura original 4K; se recibió ${width} × ${height}`)
+    this.name = 'InsufficientResolutionError'
+  }
+}
+
 export interface PhotoFiles {
   /** Valida y guarda la captura original. Lanza `InvalidImageError` si no es una imagen válida. */
   saveOriginal(photoId: string, jpeg: Uint8Array): Promise<StoredImage>
@@ -45,8 +52,8 @@ export interface PhotoFiles {
 
 /** Cómo quitar el fondo de la captura antes de ubicar a la persona sobre el escenario. */
 export type BackgroundRemoval =
-  | { method: 'chroma'; chroma: ChromaSettings }
-  | { method: 'segmentation'; guide: PersonGuide | null }
+  | { method: 'chroma'; chroma: ChromaSettings; matchSceneTone?: boolean }
+  | { method: 'segmentation'; guide: PersonGuide | null; matchSceneTone?: boolean }
   | null
 
 export interface Compositor {
@@ -127,6 +134,7 @@ export function compositionInputs(p: ParticipationForCapture, placements: (Chara
     scenario,
     characters: placeCharacters(characters as LayerResource[], p.config.characterSlots, {
       placements,
+      videoTransforms: p.config.characterVideoTransforms,
       limits: p.config.freePlacement,
       output: OUTPUT
     }),
@@ -164,9 +172,11 @@ export class CaptureService {
       stored = await this.deps.files.saveOriginal(photoId, jpeg)
     } catch (error) {
       state.failures++
-      const invalid = error instanceof InvalidImageError
-      this.record('error', 'capture.save', 'fail', { reason: invalid ? 'invalid_image' : 'storage_error', error })
-      return { ok: false, error: invalid ? 'invalid_image' : 'storage_error', attemptsLeft: this.attemptsLeft() }
+      const reason = error instanceof InsufficientResolutionError ? 'resolution_unsupported'
+        : error instanceof InvalidImageError ? 'invalid_image' : 'storage_error'
+      this.record('error', 'capture.save', 'fail', { reason, error,
+        ...(error instanceof InsufficientResolutionError ? { width: error.width, height: error.height } : {}) })
+      return { ok: false, error: reason, attemptsLeft: this.attemptsLeft() }
     }
 
     this.deps.repository.insertPhoto({ id: photoId, participationId, kind: 'original', status: 'captured', ...stored })
@@ -202,13 +212,14 @@ export class CaptureService {
       const removal: BackgroundRemoval = !inputs.scenario || inputs.fillsHole
         ? null
         : background.method === 'chroma'
-          ? { method: 'chroma', chroma }
+          ? { method: 'chroma', chroma, matchSceneTone: capture.matchSceneTone }
           : background.method === 'segmentation'
-            ? { method: 'segmentation', guide: state.original.guide }
+            ? { method: 'segmentation', guide: state.original.guide, matchSceneTone: capture.matchSceneTone }
             : null
       const framing = capture.framingPercent / 100
       // El encuadre automático solo aplica con recorte automático y si está activado.
-      const autoFrame = !inputs.fillsHole && capture.autoFraming && background.method === 'segmentation' && frame ? sanitizePlacement(frame) : null
+      const automaticEnabled = capture.autoFraming || (capture.matchCharacterSize && inputs.characters.length > 0)
+      const autoFrame = removal?.method === 'segmentation' && automaticEnabled && frame ? sanitizePlacement(frame) : null
       stored = await this.deps.compositor.compose(
         plan,
         state.original.filePath,

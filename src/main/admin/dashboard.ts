@@ -53,6 +53,12 @@ export function buildDashboard(deps: DashboardDeps): DashboardData {
   }
 
   const alerts: string[] = []
+  if (settings.retention.enabled) {
+    const cutoff = new Date(now.getTime() - Math.max(0, settings.retention.photoDays - 1) * 86400000).toISOString()
+    const atRisk = count(`SELECT COUNT(*) AS n FROM photos WHERE kind = 'final' AND file_path IS NOT NULL
+      AND status IN ('composed', 'pending', 'failed') AND created_at <= ?`, cutoff)
+    if (atRisk) alerts.push(`${atRisk} fotografía(s) sin publicar cerca del plazo de limpieza (${settings.retention.photoDays} días). Revise Participaciones y reintente su publicación. Se avisa al menos 24 horas antes de eliminar el archivo local.`)
+  }
   if (data.availableCampaigns === 0) alerts.push('No hay campañas disponibles para el público.')
   if (data.freeDiskMb !== null && data.freeDiskMb < settings.storage.minFreeMegabytes) {
     alerts.push('Espacio en disco insuficiente: no se inician nuevas participaciones.')

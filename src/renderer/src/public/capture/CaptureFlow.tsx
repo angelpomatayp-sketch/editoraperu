@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CAMERA_PHOTO_REGION, CAMERA_SCENARIO_ID, type CampaignDetail, type CharacterOption, type Selections } from '../../../../shared/campaign'
-import { PREVIEW_OUTPUT } from '../../../../shared/composition'
+import { OUTPUT, PREVIEW_OUTPUT, photoRegionPixels } from '../../../../shared/composition'
+import { characterFrameTarget } from '../../../../shared/characterFraming'
 import { photoRegionFor, type FramePlacement } from '../../../../shared/compositionPlan'
-import type { CameraProblem, CapturedFrame } from '../../../../shared/capture'
+import { CAMERA_4K_MESSAGE, type CameraProblem, type CapturedFrame } from '../../../../shared/capture'
 import type { PublicSettings, SessionEndReason } from '../../../../shared/ipc'
 import { CompositionPreview } from '../campaign/CompositionPreview'
 import { CancelButton } from '../../ui/CancelButton'
 import { beep, shutter } from '../../ui/sounds'
-import { CameraError, captureBestFrame, openCamera, stopCamera } from './camera'
+import { CameraError, captureBestFrame, openCamera, preparePhotoCapture, stopCamera } from './camera'
 import { PersonVideo } from './PersonVideo'
 import { computePersonGuide, loadSegmenter } from './SegmentationVideo'
 
@@ -18,7 +19,7 @@ type Phase =
   | { name: 'capturing' }
   | { name: 'processing' }
   | { name: 'result'; imageDataUrl: string; retakesLeft: number }
-  | { name: 'camera_error' }
+  | { name: 'camera_error'; problem: CameraProblem }
   | { name: 'retryable'; message: string; retry: 'capture' | 'compose' }
   | { name: 'failed' }
 
@@ -35,8 +36,6 @@ interface CaptureFlowProps {
 
 /** Segundos del aviso «Ubíquese aquí» cuando no hay detección de personas. */
 const HINT_SECONDS = 5
-/** Tiempo para que el visitante se acomode después de que los personajes terminan de posar. */
-const AUTO_COUNTDOWN_SECONDS = 7
 
 const CAPTURE_RETRY_MESSAGE = 'No pudimos tomar la fotografía. Intentémoslo de nuevo.'
 const COMPOSE_RETRY_MESSAGE = 'No pudimos preparar su fotografía. Intentémoslo de nuevo.'
@@ -65,7 +64,6 @@ export function CaptureFlow({
     pendingVideoIds: Set<string>
     minimumElapsed: boolean
     minimumTimer: ReturnType<typeof setTimeout> | null
-    fallbackTimer: ReturnType<typeof setTimeout>
   } | null>(null)
   // Encuadre automático que muestra la vista previa y el que tenía al tomar la foto (para componerla igual).
   const livePlacementRef = useRef<FramePlacement | null>(null)
@@ -91,6 +89,9 @@ export function CaptureFlow({
         PREVIEW_OUTPUT
       )
   const method = cameraBackground || fillsHole ? 'none' : background.method
+  const characterTarget = settings.matchCharacterSize && method === 'segmentation'
+    ? characterFrameTarget(detail, selections.characterIds, region, OUTPUT)
+    : null
 
   // Sin detección de personas (fondo verde o sin recorte), el aviso se muestra unos segundos.
   useEffect(() => {
@@ -103,7 +104,7 @@ export function CaptureFlow({
 
   const reportProblem = useCallback((problem: CameraProblem) => {
     void window.totem.reportCameraProblem(problem)
-    setPhase({ name: 'camera_error' })
+    setPhase({ name: 'camera_error', problem })
   }, [])
 
   // La cámara solo está encendida durante la vista previa y la cuenta regresiva.
@@ -113,7 +114,7 @@ export function CaptureFlow({
     let detachVideoReady: (() => void) | null = null
     // El modelo se prepara en paralelo con la cámara; un fallo conserva el respaldo ya existente.
     const segmenterReady = method === 'segmentation' ? loadSegmenter().catch(() => undefined) : Promise.resolve()
-    openCamera(settings.cameraLabel, settings.rotation, settings.cameraControls)
+    openCamera(settings.cameraLabel, settings.rotation, settings.cameraControls, settings.cameraControlsEnabled)
       .then(async (stream) => {
         if (cancelled) return stopCamera(stream)
         streamRef.current = stream
@@ -138,6 +139,8 @@ export function CaptureFlow({
         if (source) source.srcObject = stream
         await Promise.all([videoReady, segmenterReady])
         if (cancelled) return
+        if (source) await preparePhotoCapture(stream, source)
+        if (cancelled) return
         setPhase((p) => (p.name === 'starting' ? { name: 'preview' } : p))
       })
       .catch((error: unknown) => {
@@ -147,7 +150,7 @@ export function CaptureFlow({
       cancelled = true
       detachVideoReady?.()
     }
-  }, [cameraNeeded, method, settings.cameraLabel, settings.rotation, settings.cameraControls, reportProblem])
+  }, [cameraNeeded, method, settings.cameraLabel, settings.rotation, settings.cameraControls, settings.cameraControlsEnabled, reportProblem])
 
   useEffect(() => {
     if (!cameraNeeded) {
@@ -163,7 +166,6 @@ export function CaptureFlow({
     if (!wait || wait.cycle !== cycle) return
     wait.pendingVideoIds.delete(characterId)
     if (wait.minimumElapsed && wait.pendingVideoIds.size === 0) {
-      clearTimeout(wait.fallbackTimer)
       animationWaitRef.current = null
       setCharactersReady(true)
     }
@@ -175,7 +177,6 @@ export function CaptureFlow({
     const previous = animationWaitRef.current
     if (previous) {
       if (previous.minimumTimer) clearTimeout(previous.minimumTimer)
-      clearTimeout(previous.fallbackTimer)
       animationWaitRef.current = null
     }
     if (phase.name !== 'preview') {
@@ -205,25 +206,19 @@ export function CaptureFlow({
       if (!wait || wait.cycle !== cycle) return
       wait.minimumElapsed = true
       if (wait.pendingVideoIds.size === 0) {
-        clearTimeout(wait.fallbackTimer)
         animationWaitRef.current = null
         setCharactersReady(true)
       }
     }
-    const fallbackTimer = setTimeout(() => {
-      if (animationWaitRef.current?.cycle === cycle) {
-        animationWaitRef.current = null
-        setCharactersReady(true)
-      }
-    }, Math.max(6_000, minimumDuration + 2_000))
     const minimumTimer = minimumDuration > 0 ? setTimeout(finishIfComplete, minimumDuration) : null
-    animationWaitRef.current = { cycle, pendingVideoIds, minimumElapsed: minimumDuration === 0, minimumTimer, fallbackTimer }
+    // MP4/WebM confirman su final real (o error). No vencer toda la entrada a los 6 segundos:
+    // cargar el recortador o reproducir un video largo no significa que el video haya fallado.
+    animationWaitRef.current = { cycle, pendingVideoIds, minimumElapsed: minimumDuration === 0, minimumTimer }
     if (minimumDuration === 0 && pendingVideoIds.size === 0) finishIfComplete()
     return () => {
       const wait = animationWaitRef.current
       if (wait?.cycle !== cycle) return
       if (wait.minimumTimer) clearTimeout(wait.minimumTimer)
-      clearTimeout(wait.fallbackTimer)
       animationWaitRef.current = null
     }
   }, [phase.name, detail.characterAnimation, detail.characterSlots.length, selections.characterIds.length])
@@ -255,14 +250,26 @@ export function CaptureFlow({
     let frame: CapturedFrame
     try {
       frame = await captureBestFrame(stream, video, settings.mirror, settings.rotation)
-    } catch {
+    } catch (error) {
+      if (error instanceof CameraError && error.problem === 'resolution_unsupported') {
+        reportProblem(error.problem)
+        return
+      }
       setPhase({ name: 'retryable', message: CAPTURE_RETRY_MESSAGE, retry: 'capture' })
       return
     }
+    // La señal confirma que ya hay una fotografía, no que apenas se está solicitando al sensor.
+    if (settings.soundEnabled) shutter()
+    setFlash(true)
+    setTimeout(() => setFlash(false), 250)
     const guide = await guidePromise
     setPhase({ name: 'processing' })
     const saved = await window.totem.saveCapture(sessionId, frame, guide)
     if (!saved.ok) {
+      if (saved.error === 'resolution_unsupported') {
+        reportProblem('resolution_unsupported')
+        return
+      }
       setPhase(
         saved.attemptsLeft > 0 && saved.error !== 'insufficient_disk' && saved.error !== 'session_invalid'
           ? { name: 'retryable', message: CAPTURE_RETRY_MESSAGE, retry: 'capture' }
@@ -271,15 +278,12 @@ export function CaptureFlow({
       return
     }
     await compose()
-  }, [method, compose, sessionId, settings.mirror, settings.rotation])
+  }, [method, compose, reportProblem, sessionId, settings.mirror, settings.rotation, settings.soundEnabled])
 
   // Cuenta regresiva visual con señal sonora opcional (RF-CAP-004).
   useEffect(() => {
     if (phase.name !== 'countdown') return
     if (phase.value === 0) {
-      if (settings.soundEnabled) shutter()
-      setFlash(true)
-      setTimeout(() => setFlash(false), 250)
       void takePhoto().finally(() => {
         busy.current = false
       })
@@ -298,7 +302,7 @@ export function CaptureFlow({
     const begin = () => {
       if (busy.current) return
       busy.current = true
-      setPhase({ name: 'countdown', value: AUTO_COUNTDOWN_SECONDS })
+      setPhase({ name: 'countdown', value: settings.countdownSeconds })
     }
     if (video && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
       begin()
@@ -306,13 +310,17 @@ export function CaptureFlow({
     }
     video?.addEventListener('loadeddata', begin, { once: true })
     return () => video?.removeEventListener('loadeddata', begin)
-  }, [phase.name, charactersReady])
+  }, [phase.name, charactersReady, settings.countdownSeconds])
 
   const retake = async () => {
     if (busy.current) return
     busy.current = true
     try {
       const result = await window.totem.retake(sessionId)
+      if (result.ok) {
+        setCharactersReady(false)
+        setAnimationCycle(0)
+      }
       setPhase(result.ok ? { name: 'starting' } : { name: 'failed' })
     } finally {
       busy.current = false
@@ -349,13 +357,15 @@ export function CaptureFlow({
   if (phase.name === 'camera_error' || phase.name === 'failed' || phase.name === 'retryable') {
     const title =
       phase.name === 'camera_error'
-        ? 'La cámara no está disponible'
+        ? phase.problem === 'resolution_unsupported' ? 'No se pudo capturar en 4K' : 'La cámara no está disponible'
         : phase.name === 'failed'
           ? 'No fue posible completar su fotografía'
           : 'Algo no salió bien'
     const text =
       phase.name === 'retryable'
         ? phase.message
+        : phase.name === 'camera_error' && phase.problem === 'resolution_unsupported'
+        ? CAMERA_4K_MESSAGE
         : 'Por favor, solicite asistencia al personal. Disculpe las molestias.'
     return (
       <main className="screen screen--message">
@@ -418,21 +428,24 @@ export function CaptureFlow({
           }}
           onCharacterVideoEnd={finishCharacterVideo}
           person={
-            phase.name === 'starting' || working ? null : (
+            phase.name === 'starting' ? null : (
               <>
                 <PersonVideo
+                  frozen={working}
                   videoRef={videoRef}
                   method={method}
                   chroma={chroma}
                   mirror={settings.mirror}
                   framing={settings.framingPercent / 100}
-                  regionPx={{ width: region.width * PREVIEW_OUTPUT.width, height: region.height * PREVIEW_OUTPUT.height }}
-                  autoFraming={settings.autoFraming && !fillsHole}
+                  regionPx={photoRegionPixels(region)}
+                  autoFraming={(settings.autoFraming || characterTarget !== null) && !fillsHole}
+                  characterTarget={characterTarget}
+                  lockFraming={characterTarget !== null && phase.name === 'countdown' && phase.value <= 2}
                   backdrop={fillsHole}
                   onPlacement={onPlacement}
                   onPresence={setPersonPresent}
                 />
-                <div className={`capture__guide${showHint ? ' capture__guide--hint' : ''}`} aria-hidden="true" />
+                {!working && <div className={`capture__guide${showHint ? ' capture__guide--hint' : ''}`} aria-hidden="true" />}
               </>
             )
           }
@@ -442,9 +455,9 @@ export function CaptureFlow({
               className="position-hint"
               style={{
                 left: `${region.x * 100}%`,
-                top: `${region.y * 100}%`,
+                top: `${(region.y + region.height * 0.5) * 100}%`,
                 width: `${region.width * 100}%`,
-                height: `${region.height * 100}%`
+                height: `${region.height * 0.5 * 100}%`
               }}
               role="status"
             >
@@ -474,7 +487,7 @@ export function CaptureFlow({
               : counting
                 ? 'Manténgase en posición para la fotografía.'
                 : capturing
-                  ? 'Obteniendo la fotografía de máxima resolución…'
+                  ? 'No se mueva: estamos tomando la fotografía…'
                   : 'Preparando su fotografía…'}
         </p>
       </footer>

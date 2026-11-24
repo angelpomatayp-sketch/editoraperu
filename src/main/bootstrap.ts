@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs'
+import { availableParallelism } from 'node:os'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
@@ -22,8 +23,10 @@ import { SqliteAuditRepository } from '../infra/db/repositories/auditRepository'
 import { SqliteCampaignRepository } from '../infra/db/repositories/campaignRepository'
 import { SqliteCaptureRepository } from '../infra/db/repositories/captureRepository'
 import { ModnetSegmenter } from '../infra/imaging/modnetSegmenter'
+import { BirefnetSegmenter } from '../infra/imaging/birefnetSegmenter'
 import { FsPhotoFiles } from '../infra/imaging/photoFiles'
 import { SharpCompositor } from '../infra/imaging/sharpCompositor'
+import { WorkerCompositor } from '../infra/imaging/workerCompositor'
 import { OUTPUT } from '../shared/composition'
 import { SqliteConsentRepository } from '../infra/db/repositories/consentRepository'
 import { SqliteMediaRepository } from '../infra/db/repositories/mediaRepository'
@@ -40,6 +43,7 @@ import { cleanTempDir } from '../infra/storage/tempCleanup'
 const LOG_RETENTION_DAYS = 30
 
 export interface AppContext {
+  stopImaging?: () => Promise<void> | void
   paths: DataPaths
   logger: Logger
   db: DatabaseSync
@@ -68,6 +72,9 @@ export interface BootstrapOptions {
   publicationSecret?: () => string | null
   /** Carpeta con los modelos de recorte (MODNet); si falta, el recorte automático no está disponible. */
   modelsDir?: string
+  /** Modelo fotográfico verificado, guardado fuera del programa para conservarlo al actualizar. */
+  portraitModelPath?: string
+  compositionWorkerPath?: string
   /** Servicio incluido en el instalador; se usa si el panel no tiene URL o clave propias. */
   publicationDefaults?: { baseUrl: string; secret: string } | null
 }
@@ -166,11 +173,15 @@ export function bootstrap(options: BootstrapOptions): BootstrapOutcome {
 
   const contentExists = (relativePath: string) => existsSync(join(paths.content, relativePath))
   const segmenter = options.modelsDir ? new ModnetSegmenter(join(options.modelsDir, 'modnet.onnx')) : null
-  if (settings.get().background.method === 'segmentation' && !segmenter?.available()) {
+  const portraitPath = options.portraitModelPath ?? (options.modelsDir ? join(options.modelsDir, 'birefnet-portrait.onnx') : null)
+  const portraitSegmenter = portraitPath ? new BirefnetSegmenter(portraitPath) : null
+  const photoSegmenter = portraitSegmenter?.available() ? portraitSegmenter : segmenter
+  fileLogger.log('info', 'segmentation.photo_model', { model: portraitSegmenter?.available() ? 'birefnet-portrait' : 'modnet' })
+  if (settings.get().background.method === 'segmentation' && !photoSegmenter?.available()) {
     warnings.push('El modelo de recorte automático no está instalado: ejecute npm run models')
-  } else if (settings.get().background.method === 'segmentation') {
+  } else if (settings.get().background.method === 'segmentation' && !options.compositionWorkerPath) {
     // Carga en segundo plano: no retrasa el inicio y la primera foto no espera al modelo.
-    void segmenter?.warmUp().catch((error) => fileLogger.log('warn', 'segmentation.warmup_failed', { error }))
+    void photoSegmenter?.warmUp().catch((error) => fileLogger.log('warn', 'segmentation.warmup_failed', { error }))
   }
   const participations = new SqliteParticipationRepository(db)
   const interrupted = participations.closeInterrupted(new Date().toISOString())
@@ -185,15 +196,33 @@ export function bootstrap(options: BootstrapOptions): BootstrapOutcome {
   const campaigns = new CampaignCatalog(new SqliteCampaignRepository(db), contentExists, contentUrl, audit)
   const consents = new SqliteConsentRepository(db)
   const registration = new RegistrationService(sessions, campaigns, consents, participations, audit)
+  const workerCompositor = options.compositionWorkerPath ? new WorkerCompositor(options.compositionWorkerPath, {
+    dataRoot: paths.root, contentDir: paths.content, output: OUTPUT,
+    model: portraitSegmenter?.available() ? 'birefnet' : 'modnet',
+    modelPath: portraitSegmenter?.available() ? portraitPath! : segmenter?.available() ? join(options.modelsDir!, 'modnet.onnx') : undefined,
+    // CPU FP32 conserva el comportamiento probado; DirectML solo se habilita para evaluación explícita.
+    provider: process.env['TOTEM_PHOTO_PROVIDER'] === 'dml' ? 'dml' : 'cpu',
+    threads: process.env['TOTEM_PHOTO_THREADS'] && /^\d+$/.test(process.env['TOTEM_PHOTO_THREADS'])
+      ? Math.min(32, Number(process.env['TOTEM_PHOTO_THREADS'])) : Math.min(8, availableParallelism())
+  }, (event) => {
+    if (event.event === 'timing') fileLogger.log('info', 'composition.timing', { stage: event.stage, milliseconds: event.milliseconds })
+    else {
+      fileLogger.log('warn', 'composition.worker_warning', { message: event.message, error: event.error })
+      audit.record({ level: 'warn', category: 'composition', action: event.message ?? 'worker_warning', result: 'fail', detail: { error: event.error } })
+    }
+  }) : null
+  if (workerCompositor && settings.get().background.method === 'segmentation') {
+    void workerCompositor.warmUp().catch((error: unknown) => fileLogger.log('warn', 'segmentation.warmup_failed', { error: String(error) }))
+  }
   const capture = new CaptureService({
     sessions,
     repository: new SqliteCaptureRepository(db),
     files: new FsPhotoFiles(paths.root),
-    compositor: new SharpCompositor({
+    compositor: workerCompositor ?? new SharpCompositor({
       dataRoot: paths.root,
       contentDir: paths.content,
       output: OUTPUT,
-      segmenter: segmenter?.available() ? segmenter : null,
+      segmenter: photoSegmenter?.available() ? photoSegmenter : null,
       onWarning: (message, error) =>
         audit.record({ level: 'warn', category: 'composition', action: message, result: 'fail', detail: { error } })
     }),
@@ -229,6 +258,7 @@ export function bootstrap(options: BootstrapOptions): BootstrapOutcome {
   return {
     ok: true,
     context: {
+      stopImaging: () => workerCompositor?.dispose(),
       paths,
       logger: fileLogger,
       db,

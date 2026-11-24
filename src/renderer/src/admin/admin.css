@@ -346,6 +346,33 @@
   gap: calc(var(--a-unit) * 0.5);
 }
 
+.layout-video-preview {
+  position: absolute;
+  object-fit: fill;
+  pointer-events: none;
+}
+
+.layout-camera-backdrop {
+  position: absolute;
+  inset: 0;
+  background: repeating-conic-gradient(#26374e 0% 25%, #1c2a40 0% 50%) 50% / 32px 32px;
+}
+
+.layout-video-controls {
+  min-width: 0;
+  margin-block: 16px;
+  border: 1px solid #526278;
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.layout-video-adjustment input[type='range'] {
+  width: 100%;
+  min-height: 48px;
+  accent-color: #89b8ff;
+  touch-action: pan-y;
+}
+
 .tag {
   display: inline-block;
   padding: 0 calc(var(--a-unit) * 0.8);

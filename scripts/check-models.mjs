@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const required = ['resources/models/modnet.onnx', 'resources/models/selfie_segmenter.tflite', 'resources/vendor/mediapipe/wasm']
+const required = ['resources/models/BiRefNet-LICENSE.txt', 'resources/models/modnet.onnx', 'resources/models/selfie_segmenter.tflite', 'resources/vendor/mediapipe/wasm']
 const missing = required.filter((path) => !existsSync(join(root, path)))
 if (missing.length > 0) {
   console.error(`Faltan recursos para el instalador: ${missing.join(', ')}\nEjecute primero: npm run models`)

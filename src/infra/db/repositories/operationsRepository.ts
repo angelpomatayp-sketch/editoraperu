@@ -27,6 +27,7 @@ export interface PhotoRow {
   published_at: string | null
   expires_at: string | null
   public_token: string | null
+  public_url: string | null
   queue_status: string | null
   queue_attempts: number | null
   queue_error: string | null
@@ -135,6 +136,13 @@ export class OperationsRepository {
     this.db.prepare(`UPDATE publication_queue SET status = 'cancelled', updated_at = ? WHERE photo_id = ? AND status <> 'done'`).run(nowIso, photoId)
   }
 
+  /** Limpiar el archivo local no invalida un QR que aún vive en el servidor. */
+  markLocalPhotoPurged(photoId: string, nowIso: string): void {
+    const kept = this.db.prepare(`UPDATE photos SET file_path = NULL, updated_at = ?
+      WHERE id = ? AND kind = 'final' AND status = 'published' AND expires_at > ?`).run(nowIso, photoId, nowIso)
+    if (!Number(kept.changes)) this.markPhotoDeleted(photoId, nowIso)
+  }
+
   /** Elimina nombres y DNI conservando la constancia técnica de la participación (RF-PAR-005). */
   anonymize(participationId: string, nowIso: string): void {
     this.db
@@ -151,9 +159,23 @@ export class OperationsRepository {
     return this.db
       .prepare(
         `SELECT ph.id, ph.file_path FROM photos ph JOIN participations p ON p.id = ph.participation_id
-         WHERE ph.file_path IS NOT NULL AND p.started_at < ?`
+         WHERE ph.file_path IS NOT NULL AND p.finished_at IS NOT NULL AND ph.created_at < ?
+           AND ph.status <> 'deleted'
+           AND NOT EXISTS (SELECT 1 FROM publication_queue q WHERE q.photo_id = ph.id AND q.status = 'in_progress')`
       )
       .all(cutoffIso) as { id: string; file_path: string }[]
+  }
+
+  warnPhotoRetention(cutoffIso: string, nowIso: string): number {
+    let count = 0
+    for (const photo of this.photosOlderThan(cutoffIso)) {
+      count += Number(this.db.prepare('INSERT OR IGNORE INTO photo_retention_notices (photo_id, warned_at) VALUES (?, ?)').run(photo.id, nowIso).changes)
+    }
+    return count
+  }
+
+  wasWarnedBefore(photoId: string, cutoffIso: string): boolean {
+    return Boolean(this.db.prepare('SELECT 1 FROM photo_retention_notices WHERE photo_id = ? AND warned_at <= ?').get(photoId, cutoffIso))
   }
 
   participationsWithPersonalDataOlderThan(cutoffIso: string): string[] {

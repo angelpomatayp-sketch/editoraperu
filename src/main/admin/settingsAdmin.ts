@@ -12,6 +12,8 @@ interface BackgroundView {
   method: BackgroundMethod
   chroma: ChromaSettings
   cameraControls: CameraControls
+  cameraControlsEnabled: boolean
+  matchSceneTone: boolean
 }
 
 export interface SecretAccess {
@@ -79,7 +81,10 @@ export class SettingsAdmin {
         chroma: current.chroma,
         background: current.background,
         attract: current.attract,
-        capture: { ...next.capture, cameraControls: current.capture.cameraControls }
+        capture: {
+          ...next.capture, cameraControls: current.capture.cameraControls,
+          cameraControlsEnabled: current.capture.cameraControlsEnabled, matchSceneTone: current.capture.matchSceneTone
+        }
       },
       actorId
     )
@@ -90,13 +95,20 @@ export class SettingsAdmin {
   /** Método para quitar el fondo, calibración del croma y ajustes de imagen de la cámara. */
   getBackground(): BackgroundView {
     const { background, chroma, capture } = this.settings.get()
-    return { method: background.method, chroma, cameraControls: capture.cameraControls }
+    return {
+      method: background.method, chroma, cameraControls: capture.cameraControls,
+      cameraControlsEnabled: capture.cameraControlsEnabled, matchSceneTone: capture.matchSceneTone
+    }
   }
 
   saveBackground(input: BackgroundView, actorId: string): BackgroundView {
     const current = this.settings.get()
     const result = this.settings.update(
-      { ...current, background: { method: input.method }, chroma: input.chroma, capture: { ...current.capture, cameraControls: input.cameraControls } },
+      {
+        ...current, background: { method: input.method }, chroma: input.chroma,
+        capture: { ...current.capture, cameraControls: input.cameraControls,
+          cameraControlsEnabled: input.cameraControlsEnabled, matchSceneTone: input.matchSceneTone }
+      },
       actorId
     )
     if (!result.ok) throw new AdminError('invalid_settings', result.errors.join('; '))
@@ -106,7 +118,8 @@ export class SettingsAdmin {
       action: 'background.configure',
       result: 'ok',
       actor: { type: 'user', id: actorId },
-      detail: { method: input.method, cameraControls: input.cameraControls }
+      detail: { method: input.method, cameraControls: input.cameraControls,
+        cameraControlsEnabled: input.cameraControlsEnabled, matchSceneTone: input.matchSceneTone }
     })
     return this.getBackground()
   }

@@ -1,9 +1,11 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { rmSync } from 'node:fs'
 import { basename, join } from 'node:path'
+import QRCode from 'qrcode'
 import {
   PAGE_SIZE,
   type AuditFilters,
+  type AdminPhotoQr,
   type AuditRow,
   type DeletionResult,
   type ExportResult,
@@ -98,8 +100,12 @@ export class OperationsAdmin {
         width: p.width,
         height: p.height,
         createdAt: p.created_at,
+        localAvailable: Boolean(p.file_path),
         publishedAt: p.published_at,
         expiresAt: p.expires_at,
+        retentionWarning: this.deps.settings().retention.enabled && p.file_path && p.kind === 'final' && ['composed', 'pending', 'failed'].includes(p.status)
+          && Date.parse(p.created_at) <= this.now().getTime() - Math.max(0, this.deps.settings().retention.photoDays - 1) * 86400000
+          ? `Fotografía sin publicar: el archivo local está próximo a eliminarse por la política de ${this.deps.settings().retention.photoDays} días. Reintente la publicación. La limpieza exige un aviso registrado con al menos 24 horas de antelación.` : null,
         tokenHint: p.public_token ? `${p.public_token.slice(0, 6)}…` : null,
         queue: p.queue_status ? { status: p.queue_status, attempts: p.queue_attempts ?? 0, lastError: p.queue_error } : null
       }))
@@ -165,7 +171,7 @@ export class OperationsAdmin {
     if (!this.deps.repo.requeue(photoId, this.iso())) {
       throw new AdminError('not_retryable', 'Esta fotografía no tiene una publicación pendiente o fallida')
     }
-    const outcome = await this.deps.publication.processQueue()
+    await this.deps.publication.retryPhoto(photoId)
     const published = this.deps.repo.photo(photoId)?.status === 'published'
     this.deps.audit.record({
       level: published ? 'info' : 'warn',
@@ -174,12 +180,25 @@ export class OperationsAdmin {
       result: published ? 'ok' : 'fail',
       actor: { type: 'user', id: viewer.userId },
       entity: { type: 'photo', id: photoId },
-      detail: { ...outcome }
+      detail: { published }
     })
     return { published }
   }
 
   // ----- Reportes (8.18) -----
+
+  /** El enlace completo no sale al panel; solo se entrega su QR, con permiso explícito y auditoría. */
+  async qr(photoId: string, viewer: Viewer): Promise<AdminPhotoQr> {
+    const photo = this.deps.repo.photo(photoId)
+    if (!photo || photo.kind !== 'final' || photo.status !== 'published' || !photo.public_url || !photo.expires_at || photo.expires_at <= this.iso()) {
+      throw new AdminError('not_available', 'La fotografía no está publicada o su enlace ya venció')
+    }
+    const url = new URL(photo.public_url)
+    if (!['https:', 'http:'].includes(url.protocol)) throw new AdminError('not_available', 'El enlace de publicación no es válido')
+    const qrDataUrl = await QRCode.toDataURL(url.href, { width: 480, margin: 4, errorCorrectionLevel: 'M' })
+    this.deps.audit.record({ level: 'info', category: 'publication', action: 'photo.qr', result: 'ok', actor: { type: 'user', id: viewer.userId }, entity: { type: 'photo', id: photoId } })
+    return { photoId, qrDataUrl, expiresAt: photo.expires_at }
+  }
 
   async exportParticipations(filters: ParticipationFilters, viewer: Viewer): Promise<ExportResult> {
     this.guardDni(filters, viewer)

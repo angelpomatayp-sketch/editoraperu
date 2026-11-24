@@ -9,7 +9,7 @@ interface DownloadScreenProps {
 }
 
 const UNAVAILABLE_MESSAGE =
-  'En este momento no es posible generar el código de descarga. Su fotografía quedó guardada; por favor, consulte al personal.'
+  'En este momento no es posible generar el código de descarga. Su fotografía quedó guardada en el tótem. Consulte al personal para reintentar la publicación y mostrar su QR cuando vuelva la conexión, antes de que venza el plazo de conservación.'
 
 const RETRY_DELAY_MS = 2_000
 

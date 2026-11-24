@@ -25,7 +25,7 @@ describe('arranque (RF-KIO-001, RF-ALM-001)', () => {
 
     expect(readdirSync(root).sort()).toEqual(['config', 'content', 'db', 'logs', 'photos', 'tmp'])
     expect(readdirSync(join(root, 'photos')).sort()).toEqual(['finals', 'originals'])
-    expect(outcome.context.schemaVersion).toBe(7)
+    expect(outcome.context.schemaVersion).toBe(10)
 
     const event = outcome.context.db
       .prepare("SELECT category, action, result FROM audit_events WHERE action = 'start'")

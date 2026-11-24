@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, rmSync, statSync } from 'node:fs'
+import { mkdirSync, rmSync, statSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { extname, join } from 'node:path'
 import ffmpegStatic from 'ffmpeg-static'
-import { applyChromaKey, DEFAULT_CHROMA, detectGreenScreen } from '../../shared/chroma'
+import { applyCharacterChromaKey, detectGreenScreen } from '../../shared/chroma'
 import { refineMatte } from './refineMatte'
 import sharp from './sharpSetup'
 import { IMAGE_LIMITS, importVideo, ImportError, VIDEO_LIMITS, type CharacterAnimationBackground, type ImportedCharacter } from './resourceImport'
@@ -42,7 +42,7 @@ async function removePoseBackground(file: string, segmenter: ModnetSegmenter | n
 
   const greenScreen = detectGreenScreen(data, info.width, info.height)
   if (greenScreen && greenScreen.ratio >= 0.35) {
-    applyChromaKey(data, { ...DEFAULT_CHROMA, keyColor: greenScreen.keyColor })
+    applyCharacterChromaKey(data, info.width, info.height, greenScreen.keyColor)
     await sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } }).png().toFile(`${file}.cut.png`)
     rmSync(file, { force: true })
     await sharp(`${file}.cut.png`).png().toFile(file)
@@ -66,24 +66,22 @@ async function removePoseBackground(file: string, segmenter: ModnetSegmenter | n
   return 'segmentation'
 }
 
-/** Una pose bien recortada solo conserva transparencia parcial en una franja estrecha del borde. */
-function partialAlphaRatio(pixels: Buffer, width: number, height: number): number {
-  let partial = 0
-  for (let i = 3; i < pixels.length; i += 4) {
-    const alpha = pixels[i]!
-    if (alpha > 0 && alpha < 255) partial++
-  }
-  return partial / (width * height)
+function poseRevision(file: string, animationFile: string): string {
+  const pose = statSync(file), video = statSync(animationFile)
+  return JSON.stringify({ revision: 2, poseSize: pose.size, poseTime: pose.mtimeMs, videoSize: video.size, videoTime: video.mtimeMs })
+}
+
+function markPose(file: string, animationFile: string): void {
+  writeFileSync(`${file}.chroma.json`, poseRevision(file, animationFile))
 }
 
 /**
- * Reconstruye desde el video las poses antiguas dañadas por una tolerancia de croma demasiado
- * amplia. Reextraer el cuadro original es imprescindible: una pose ya semitransparente perdió el
- * alfa sólido de la ropa y no puede recuperarlo usando solo su PNG procesado.
+ * Reconstruye las poses anteriores desde el video original, una vez por revisión del algoritmo.
+ * No vuelve a procesar el PNG ya recortado: eso acumularía pérdida de color o transparencia.
  */
 export async function repairGreenScreenPose(file: string, animationFile: string): Promise<boolean> {
-  const current = await sharp(file).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
-  if (partialAlphaRatio(current.data, current.info.width, current.info.height) < 0.08) return false
+  // No depender de cuánto verde queda: las poses anteriores ya limitaron ese canal.
+  try { if (readFileSync(`${file}.chroma.json`, 'utf8') === poseRevision(file, animationFile)) return false } catch { /* primera actualización */ }
 
   const source = `${file}.chroma-source.png`
   const output = `${file}.chroma-repair.png`
@@ -92,10 +90,10 @@ export async function repairGreenScreenPose(file: string, animationFile: string)
     const { data, info } = await sharp(source).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
     const greenScreen = detectGreenScreen(data, info.width, info.height)
     if (!greenScreen || greenScreen.ratio < 0.35) return false
-    applyChromaKey(data, { ...DEFAULT_CHROMA, keyColor: greenScreen.keyColor })
+    applyCharacterChromaKey(data, info.width, info.height, greenScreen.keyColor)
     await sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } }).png().toFile(output)
-    rmSync(file, { force: true })
-    await sharp(output).png().toFile(file)
+    renameSync(output, file)
+    markPose(file, animationFile)
     return true
   } finally {
     rmSync(source, { force: true })
@@ -128,6 +126,7 @@ export async function importCharacterVideo(
     if (Math.min(meta.width, meta.height) < IMAGE_LIMITS.minSide) throw new ImportError(`El video debe medir al menos ${IMAGE_LIMITS.minSide} px por lado`)
     if (Math.max(meta.width, meta.height) > IMAGE_LIMITS.maxSide) throw new ImportError(`El video no puede superar ${IMAGE_LIMITS.maxSide} px por lado`)
     const poseSize = statSync(poseFile).size
+    if (background === 'chroma') markPose(poseFile, join(contentDir, animation.filePath))
     return {
       image: { filePath: posePath, name: animation.name, format: 'png', width: meta.width, height: meta.height, sizeBytes: poseSize, type: 'image' },
       animation: { ...animation, width: meta.width, height: meta.height, durationMs: seconds === null ? null : Math.round(seconds * 1000), background }
@@ -136,6 +135,7 @@ export async function importCharacterVideo(
     rmSync(join(contentDir, animation.filePath), { force: true })
     rmSync(poseFile, { force: true })
     rmSync(`${poseFile}.cut.png`, { force: true })
+    rmSync(`${poseFile}.chroma.json`, { force: true })
     if (error instanceof ImportError) throw error
     throw new ImportError('No se pudo preparar el video del personaje')
   }

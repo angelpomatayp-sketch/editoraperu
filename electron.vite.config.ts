@@ -11,10 +11,12 @@ function builtInPublication(): { baseUrl: string; secret: string } | null {
   if (process.env['TOTEM_EMBED_PUBLICATION'] !== '1') return null
   const file = resolve('.data/config/publicador-produccion.json')
   if (!existsSync(file)) {
-    console.warn('Sin publicador-produccion.json: el instalador no incluirá el servicio de publicación.')
-    return null
+    throw new Error('Falta .data/config/publicador-produccion.json: no se puede generar un instalador sin publicador.')
   }
   const { baseUrl, secret } = JSON.parse(readFileSync(file, 'utf8')) as { baseUrl: string; secret: string }
+  if (typeof baseUrl !== 'string' || !URL.canParse(baseUrl) || new URL(baseUrl).protocol !== 'https:' || typeof secret !== 'string' || secret.length < 32) {
+    throw new Error('Configuración de publicación inválida: se requiere URL HTTPS y clave de al menos 32 caracteres.')
+  }
   return { baseUrl, secret }
 }
 
@@ -22,7 +24,7 @@ export default defineConfig({
   main: {
     define: { __BUILT_IN_PUBLICATION__: JSON.stringify(builtInPublication()) },
     build: {
-      rollupOptions: { input: { index: resolve('src/main/index.ts') } }
+      rollupOptions: { input: { index: resolve('src/main/index.ts'), compositionWorker: resolve('src/infra/imaging/compositionWorker.ts') } }
     }
   },
   preload: {

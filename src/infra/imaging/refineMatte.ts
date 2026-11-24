@@ -19,9 +19,8 @@ const HALO_LOW = 0.08
 const HALO_HIGH = 0.92
 
 /** Media de cada píxel en una ventana de (2r+1)², recortada en los bordes (tabla de sumas). */
-function boxMean(src: Float32Array, width: number, height: number, r: number): Float32Array {
+function boxMean(src: Float32Array, width: number, height: number, r: number, sums: Float64Array): Float32Array {
   const stride = width + 1
-  const sums = new Float64Array(stride * (height + 1))
   for (let y = 0; y < height; y++) {
     let row = 0
     for (let x = 0; x < width; x++) {
@@ -57,16 +56,19 @@ export function refineMatte(alpha: Uint8Array, rgb: Uint8Array, width: number, h
   }
 
   const r = Math.max(2, Math.round(width * RADIUS))
-  const meanI = boxMean(guide, width, height, r)
-  const meanP = boxMean(p, width, height, r)
+  // La tabla auxiliar se sobrescribe completamente; su fila/columna cero permanecen en cero.
+  // Reutilizarla evita reservar seis tablas de ~66 MB en una foto 4K, con idéntica aritmética.
+  const sums = new Float64Array((width + 1) * (height + 1))
+  const meanI = boxMean(guide, width, height, r, sums)
+  const meanP = boxMean(p, width, height, r, sums)
   const ii = new Float32Array(n)
   const ip = new Float32Array(n)
   for (let i = 0; i < n; i++) {
     ii[i] = guide[i]! * guide[i]!
     ip[i] = guide[i]! * p[i]!
   }
-  const corrI = boxMean(ii, width, height, r)
-  const corrIp = boxMean(ip, width, height, r)
+  const corrI = boxMean(ii, width, height, r, sums)
+  const corrIp = boxMean(ip, width, height, r, sums)
 
   const a = ii // se reutilizan los arreglos ya consumidos
   const b = ip
@@ -76,8 +78,8 @@ export function refineMatte(alpha: Uint8Array, rgb: Uint8Array, width: number, h
     a[i] = covIp / (varI + EPSILON)
     b[i] = meanP[i]! - a[i]! * meanI[i]!
   }
-  const meanA = boxMean(a, width, height, r)
-  const meanB = boxMean(b, width, height, r)
+  const meanA = boxMean(a, width, height, r, sums)
+  const meanB = boxMean(b, width, height, r, sums)
 
   const out = Buffer.alloc(n)
   for (let i = 0; i < n; i++) {

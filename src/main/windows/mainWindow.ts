@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { BrowserWindow, screen, session, shell } from 'electron'
+import { app, BrowserWindow, screen, session, shell } from 'electron'
 import { RENDERER_SCHEME } from '../protocol'
 
 export interface MainWindowOptions {
@@ -38,6 +38,7 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
     autoHideMenuBar: true,
     backgroundColor: '#0b1f3a',
     title: 'Tótem Editora Perú',
+    icon: join(app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources'), 'icon.ico'),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyChromaKey, DEFAULT_CHROMA, hexToRgb } from '../../src/shared/chroma'
+import { applyChromaKey, applyCharacterChromaKey, CHARACTER_CHROMA, DEFAULT_CHROMA, hexToRgb } from '../../src/shared/chroma'
 
 function pixel(r: number, g: number, b: number): Uint8Array {
   return new Uint8Array([r, g, b, 255])
@@ -11,6 +11,27 @@ function key(px: Uint8Array, settings = DEFAULT_CHROMA): Uint8Array {
 }
 
 describe('recorte por fondo verde (croma, sin IA)', () => {
+  it('limpia solo el borde del personaje conservando exactamente el alfa y el interior', () => {
+    const width = 21, height = 21
+    const image = new Uint8Array(width * height * 4)
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const color = x < 5 ? [0, 255, 0, 255] : x === 5 ? [140, 190, 120, 255] : [190, 150, 120, 255]
+      image.set(color, (y * width + x) * 4)
+    }
+    const baseline = image.slice()
+    applyChromaKey(baseline, { ...CHARACTER_CHROMA, keyColor: '#00ff00' })
+    applyCharacterChromaKey(image, width, height, '#00ff00')
+    for (let i = 3; i < image.length; i += 4) expect(image[i]).toBe(baseline[i])
+    expect([...image.slice((10 * width + 5) * 4, (10 * width + 5) * 4 + 3)]).toEqual([190, 150, 120])
+    expect([...image.slice((10 * width + 12) * 4, (10 * width + 12) * 4 + 4)]).toEqual([190, 150, 120, 255])
+  })
+  it('el croma digital elimina el residuo verde del borde sin borrar ropa clara ni oscura', () => {
+    const edge = key(pixel(140, 200, 130), { ...CHARACTER_CHROMA, keyColor: '#00ff00' })
+    expect(edge[1]).toBe(140)
+    for (const color of [[240, 240, 235], [20, 23, 25], [210, 170, 140]]) {
+      expect(key(pixel(color[0]!, color[1]!, color[2]!), { ...CHARACTER_CHROMA, keyColor: '#00ff00' })[3]).toBe(255)
+    }
+  })
   it('el color del fondo queda transparente', () => {
     const [r, g, b] = hexToRgb(DEFAULT_CHROMA.keyColor)
     expect(key(pixel(r, g, b))[3]).toBe(0)

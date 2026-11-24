@@ -94,9 +94,10 @@ export function MaintenanceCard(): React.JSX.Element {
           Estado: <strong>{status.retention.enabled ? 'activada' : 'desactivada hasta la aprobación de la política (PD-002)'}</strong>
         </p>
         <p className="muted">
-          Con la política actual ({status.retention.photoDays} días para fotografías, {status.retention.personalDataDays} días para nombres y DNI) se eliminarían hoy{' '}
-          {status.retentionPreview.photos} fotografía(s) y se anonimizarían {status.retentionPreview.participations} participación(es).
+          Con la política actual ({status.retention.photoDays} días para fotografías, {status.retention.personalDataDays} días para nombres y DNI), alcanzaron el plazo{' '}
+          {status.retentionPreview.photos} fotografía(s) y {status.retentionPreview.participations} participación(es). Las fotos sin aviso previo esperan al menos 24 horas antes de eliminarse.
         </p>
+        <p className="muted">Las fotografías necesitan un aviso registrado al menos 24 horas antes de su eliminación. Al actualizar, los archivos antiguos reciben ese margen. Revise las publicaciones pendientes antes de que venza el plazo. No se modifican campañas, personajes, modelos ni respaldos externos.</p>
         {status.retention.enabled && can('settings.general') && (
           <button type="button" className="btn btn--danger" onClick={() => setConfirmRetention(true)}>
             Aplicar ahora
