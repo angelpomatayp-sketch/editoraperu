@@ -1,4 +1,6 @@
-export type KeyboardLayout = 'alpha' | 'numeric'
+import { useState } from 'react'
+
+export type KeyboardLayout = 'alpha' | 'numeric' | 'credentials'
 
 interface VirtualKeyboardProps {
   layout: KeyboardLayout
@@ -9,6 +11,7 @@ interface VirtualKeyboardProps {
   onKey: (key: string) => void
   onBackspace: () => void
   onShift: () => void
+  disabled?: boolean
 }
 
 const ALPHA_ROWS = [
@@ -24,6 +27,14 @@ const NUMERIC_ROWS = [
   ['7', '8', '9']
 ]
 
+const DIGITS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
+const SYMBOL_ROWS = [
+  ['!', '@', '#', '$', '%', '^', '&', '*', '(', ')'],
+  ['-', '_', '=', '+', '[', ']', '{', '}', '\\', '|'],
+  [';', ':', "'", '"', ',', '.', '/', '?', '<', '>'],
+  ['`', '~', '¡', '¿', 'á', 'é', 'í', 'ó', 'ú', 'ü']
+]
+
 /**
  * Teclado en pantalla para la interfaz táctil (RF-REG-001, RNF-002). Evita depender del teclado
  * físico o del teclado táctil de Windows. Usa `pointerdown` para no quitar el foco del campo.
@@ -34,11 +45,13 @@ export function VirtualKeyboard({
   shift,
   onKey,
   onBackspace,
-  onShift
+  onShift,
+  disabled = false
 }: VirtualKeyboardProps): React.JSX.Element {
+  const [symbols, setSymbols] = useState(false)
   const press = (action: () => void) => (event: React.PointerEvent) => {
     event.preventDefault()
-    action()
+    if (!disabled) action()
   }
 
   if (layout === 'numeric') {
@@ -47,7 +60,7 @@ export function VirtualKeyboard({
         {NUMERIC_ROWS.map((row) => (
           <div className="keyboard__row" key={row.join('')}>
             {row.map((key) => (
-              <button type="button" className="key" key={key} onPointerDown={press(() => onKey(key))}>
+              <button type="button" className="key" key={key} disabled={disabled} onPointerDown={press(() => onKey(key))}>
                 {key}
               </button>
             ))}
@@ -55,10 +68,10 @@ export function VirtualKeyboard({
         ))}
         <div className="keyboard__row">
           <span className="key key--spacer" />
-          <button type="button" className="key" onPointerDown={press(() => onKey('0'))}>
+          <button type="button" className="key" disabled={disabled} onPointerDown={press(() => onKey('0'))}>
             0
           </button>
-          <button type="button" className="key key--action" onPointerDown={press(onBackspace)} aria-label="Borrar">
+          <button type="button" className="key key--action" disabled={disabled} onPointerDown={press(onBackspace)} aria-label="Borrar">
             ⌫
           </button>
         </div>
@@ -66,12 +79,15 @@ export function VirtualKeyboard({
     )
   }
 
+  const credentials = layout === 'credentials'
+  const rows = credentials ? [DIGITS, ...(symbols ? SYMBOL_ROWS : ALPHA_ROWS)] : ALPHA_ROWS
+
   return (
     <div className="keyboard" aria-label="Teclado">
-      {ALPHA_ROWS.map((row) => (
+      {rows.map((row) => (
         <div className="keyboard__row" key={row.join('')}>
           {row.map((key) => (
-            <button type="button" className="key" key={key} onPointerDown={press(() => onKey(key))}>
+            <button type="button" className="key" key={key} disabled={disabled} onPointerDown={press(() => onKey(key))}>
               {uppercase ? key.toLocaleUpperCase('es-PE') : key}
             </button>
           ))}
@@ -83,13 +99,19 @@ export function VirtualKeyboard({
           className={`key key--action${shift ? ' key--active' : ''}`}
           onPointerDown={press(onShift)}
           aria-pressed={shift}
+          disabled={disabled}
         >
           Mayús
         </button>
-        <button type="button" className="key key--space" onPointerDown={press(() => onKey(' '))}>
+        {credentials && (
+          <button type="button" className="key key--action" disabled={disabled} onPointerDown={press(() => setSymbols((s) => !s))} aria-label={symbols ? 'Mostrar letras' : 'Mostrar símbolos'}>
+            {symbols ? 'ABC' : '#+='}
+          </button>
+        )}
+        <button type="button" className="key key--space" disabled={disabled} onPointerDown={press(() => onKey(' '))}>
           espacio
         </button>
-        <button type="button" className="key key--action" onPointerDown={press(onBackspace)} aria-label="Borrar">
+        <button type="button" className="key key--action" disabled={disabled} onPointerDown={press(onBackspace)} aria-label="Borrar">
           ⌫
         </button>
       </div>

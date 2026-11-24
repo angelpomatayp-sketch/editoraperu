@@ -35,6 +35,12 @@ una laptop, se ve centrada con franjas negras a los lados.
 4. Si hay varias cámaras, elegir la correcta en **Sistema → Parámetros generales** (nombre de la
    cámara).
 
+Desde 0.2.54, el acceso administrativo y la creación de la primera cuenta incluyen teclado en
+pantalla. Toque el campo que desea escribir; **Mayús** activa la siguiente letra mayúscula y
+**#+=** muestra símbolos (incluidos `@`, `_` y `.`); **ABC** vuelve a las letras. Los números
+siempre están disponibles. La contraseña permanece oculta y también se admite teclado físico.
+Este cambio no modifica la cámara, el recorte ni la calidad de la fotografía.
+
 En el primer inicio se descarga BiRefNet (aproximadamente 973 MB) con Internet. Se conserva en
 actualizaciones; no necesita Node.js, Python ni XAMPP en el tótem.
 

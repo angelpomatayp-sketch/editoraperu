@@ -140,6 +140,38 @@
   max-width: calc(var(--a-unit) * 50);
 }
 
+/* Acceso táctil: teclado dentro del formulario, sin tapar campos ni acciones. */
+.admin--access {
+  padding: calc(var(--a-unit) * 1.5);
+  justify-content: flex-start;
+  overflow-y: auto;
+}
+
+.admin--access .acard {
+  flex-shrink: 0;
+  max-width: none;
+  margin-block: auto;
+}
+
+.admin--access .key {
+  min-width: 0;
+  padding-inline: 0;
+}
+
+.admin--access .key:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.admin--access .key:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.admin--access input:focus-visible {
+  outline: 2px solid #79b8ff;
+  outline-offset: 2px;
+}
+
 .acard__head {
   display: flex;
   justify-content: space-between;
