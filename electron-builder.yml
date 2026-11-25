@@ -1,6 +1,6 @@
-appId: pe.editoraperu.totem
-productName: Totem Editora Peru
-copyright: Editora Perú
+appId: pe.editoraperu.totem2
+productName: Totem Editora Peru 2
+copyright: Editora Perú 2
 directories:
   output: dist
   buildResources: resources

@@ -2,7 +2,9 @@ import { useEffect, useRef, useState, type RefObject } from 'react'
 import type { ImageSegmenter } from '@mediapipe/tasks-vision'
 import type { PersonGuide } from '../../../../shared/capture'
 import { BufferedVideo } from './BufferedVideo'
-import { autoFrame, placeFrame, type CharacterFrameTarget, type FractionRect, type FramePlacement } from '../../../../shared/compositionPlan'
+import { autoFrame, placeFrame, type CharacterFrameTarget, type FramePlacement } from '../../../../shared/compositionPlan'
+import { measurePerson } from '../../../../shared/personMeasure'
+import { blendPlacement, PersonBoxSmoother } from '../../../../shared/framingSmoother'
 
 /** Motor y modelo incluidos con la aplicación; se sirven sin Internet por el protocolo interno. */
 const WASM_BASE = 'totem-media://app/vendor/mediapipe/wasm'
@@ -10,6 +12,12 @@ const MODEL_URL = 'totem-media://app/models/selfie_segmenter.tflite'
 
 /** Lado mayor del cuadro que se entrega al modelo de la vista previa. */
 const SEGMENTATION_SIDE = 512
+
+/** Tiempo sin detectar a la persona antes de darla por perdida y reiniciar el suavizado. */
+const LOST_PERSON_MS = 1200
+
+/** Constante de tiempo (ms) del encuadre visible: mayor = transición más suave y lenta. */
+const PLACEMENT_TAU_MS = 350
 
 let segmenterPromise: Promise<ImageSegmenter> | null = null
 
@@ -76,39 +84,6 @@ export async function computePersonGuide(video: HTMLVideoElement, mirror: boolea
   }
 }
 
-/** Suavizado del encuadre automático entre cuadros (0 a 1: más alto, reacciona más rápido). */
-const FRAMING_SMOOTHING = 0.2
-/** Tiempo sin detectar a nadie tras el cual se vuelve al encuadre fijo. */
-const LOST_PERSON_MS = 1000
-
-/** Contorno de la persona en la máscara (fracciones), o `null` si casi no hay persona. */
-function personBox(values: Float32Array, width: number, height: number): FractionRect | null {
-  let minX = width
-  let minY = height
-  let maxX = -1
-  let maxY = -1
-  let count = 0
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if (values[y * width + x]! <= 0.5) continue
-      count++
-      if (x < minX) minX = x
-      if (x > maxX) maxX = x
-      if (y < minY) minY = y
-      if (y > maxY) maxY = y
-    }
-  }
-  if (count < width * height * 0.005) return null
-  return { x: minX / width, y: minY / height, width: (maxX + 1 - minX) / width, height: (maxY + 1 - minY) / height }
-}
-
-const blend = (from: FractionRect, to: FractionRect, k: number): FractionRect => ({
-  x: from.x + (to.x - from.x) * k,
-  y: from.y + (to.y - from.y) * k,
-  width: from.width + (to.width - from.width) * k,
-  height: from.height + (to.height - from.height) * k
-})
-
 interface SegmentationVideoProps {
   frozen?: boolean
   videoRef: RefObject<HTMLVideoElement | null>
@@ -145,12 +120,14 @@ export function SegmentationVideo({ videoRef, mirror, framing, autoFraming, char
   options.current = { framing, autoFraming, characterTarget, lockFraming, regionPx, onPlacement, onPresence, onReady }
 
   useEffect(() => {
-    let smoothed: FractionRect | null = null
+    let display: FramePlacement | null = null
     let lastPlacement: FramePlacement | null = null
     let lastSeen = 0
+    let lastNow = 0
     let present: boolean | null = null
     let frame = 0
     let cancelled = false
+    const smoother = new PersonBoxSmoother()
     const maskCanvas = document.createElement('canvas')
     const maskContext = maskCanvas.getContext('2d')!
     // El modelo trabaja a 256 px: pasarle el cuadro 4K completo bajaba la interfaz a 5 cuadros por segundo.
@@ -198,37 +175,53 @@ export function SegmentationVideo({ videoRef, mirror, framing, autoFraming, char
           const image = maskContext.createImageData(mask.width, mask.height)
           for (let i = 0; i < values.length; i++) image.data[i * 4 + 3] = Math.round(values[i]! * 255)
           maskContext.putImageData(image, 0, 0)
-          const detected = personBox(values, mask.width, mask.height)
+          const measured = measurePerson(values, mask.width, mask.height)
           result.close()
 
           const vw = video.videoWidth
           const vh = video.videoHeight
           const { framing: fixed = 1, autoFraming: auto, characterTarget: target, lockFraming: locked, regionPx: region, onPlacement: report } = options.current
 
-          // Contorno de la persona en la orientación de la foto (en espejo si corresponde), suavizado.
-          if (detected) {
-            const person = mirror ? { ...detected, x: 1 - detected.x - detected.width } : detected
-            smoothed = smoothed ? blend(smoothed, person, FRAMING_SMOOTHING) : person
+          // Contorno completo y limpio de la persona, en la orientación de la foto y estabilizado.
+          if (measured) {
+            const person = mirror ? { ...measured.box, x: 1 - measured.box.x - measured.box.width } : measured.box
+            smoother.update(person, now)
             lastSeen = now
           } else if (now - lastSeen > LOST_PERSON_MS) {
-            smoothed = null
+            smoother.reset()
           }
+          const stable = smoother.current()
           // Hay alguien si se lo detectó hace poco (evita parpadeos del aviso «Ubíquese aquí»).
-          const nowPresent = smoothed !== null
+          const nowPresent = stable !== null
           if (nowPresent !== present) {
             present = nowPresent
             options.current.onPresence?.(nowPresent)
           }
 
-          // Mismo encuadre que la foto final: automático si hay persona; si no, el fijo configurado.
+          // Altura relativa al personaje. Si la silueta está cortada y no permite comparar alturas,
+          // se llena la zona con el encuadre automático anterior: nunca el fijo, que dejaba al
+          // visitante diminuto. El fijo solo se usa cuando no hay nadie frente a la cámara.
           const regionSize = region ?? { width, height }
-          // La referencia usa la pose final, no la animación de entrada. Al final de la cuenta se
-          // conserva el último ajuste visible: no cambia el tamaño mientras se dispara la cámara.
-          const automatic = locked && lastPlacement ? lastPlacement
-            : auto && region && smoothed ? autoFrame(smoothed, vw, vh, regionSize.width, regionSize.height, target) : null
-          lastPlacement = automatic
-          report?.(automatic)
-          const { crop, box } = automatic ?? placeFrame(vw, vh, regionSize.width, regionSize.height, fixed)
+          let candidate: FramePlacement | null = null
+          if (locked && lastPlacement) candidate = lastPlacement
+          else if (auto && region && stable) {
+            candidate = (target ? autoFrame(stable, vw, vh, regionSize.width, regionSize.height, target) : null)
+                ?? autoFrame(stable, vw, vh, regionSize.width, regionSize.height)
+          }
+          const desired = candidate ?? placeFrame(vw, vh, regionSize.width, regionSize.height, fixed)
+          const dt = lastNow ? Math.min(250, now - lastNow) : 16
+          lastNow = now
+          display = display ? blendPlacement(display, desired, 1 - Math.exp(-dt / PLACEMENT_TAU_MS)) : desired
+          // Se reporta exactamente el encuadre visible: la foto final reproduce lo que se vio.
+          if (candidate) {
+            lastPlacement = display
+            report?.(display)
+          } else {
+            lastPlacement = null
+            report?.(null)
+          }
+          const { crop, box } = display
+
 
           // Fuente en coordenadas del video sin espejo; destino dentro del recuadro de la zona.
           const sx = (mirror ? 1 - crop.x - crop.width : crop.x) * vw
