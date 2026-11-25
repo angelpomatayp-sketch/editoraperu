@@ -73,7 +73,9 @@ export interface Compositor {
      */
     backdrop?: boolean,
     /** Nivelado automático: apoya los pies de la persona en la misma línea que el primer personaje. */
-    levelToCharacter?: boolean
+    levelToCharacter?: boolean,
+    /** Filtro avanzado de color: integra a la persona en la luz y el ambiente de la escena. */
+    advancedSceneColor?: boolean
   ): Promise<StoredImage>
 }
 
@@ -230,7 +232,8 @@ export class CaptureService {
           framing,
           autoFrame,
           inputs.fillsHole === true,
-          capture.levelToCharacter === true && removal?.method === 'segmentation'
+          capture.levelToCharacter === true && removal?.method === 'segmentation',
+          capture.advancedSceneColor === true && removal !== null
       )
       const characters = plan.flatMap((l) => (l.kind === 'placed' && l.resource.type === 'character' ? [{ left: l.left, top: l.top, width: l.width }] : []))
       this.record('info', 'composition.compose', 'ok', { layers: plan.length, characters, milliseconds: Date.now() - started }, finalId)

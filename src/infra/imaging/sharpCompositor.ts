@@ -5,7 +5,7 @@ import sharp from './sharpSetup'
 import type { BackgroundRemoval, Compositor, StoredImage } from '../../core/capture/captureService'
 import { applyChromaKey } from '../../shared/chroma'
 import { guidedMatte } from './guidedMatte'
-import { contactShadow, integratePerson, type PhotoTone } from './personIntegration'
+import { applySceneColorGrade, contactShadow, integratePerson, type PhotoTone, type SceneColorProfile } from './personIntegration'
 import { refineMatte } from './refineMatte'
 import { placeFrame, sanitizePlacement, type FramePlacement, type OutputSize, type PlannedLayer } from '../../shared/compositionPlan'
 
@@ -44,7 +44,8 @@ export class SharpCompositor implements Compositor {
       framing = 1,
       frame: FramePlacement | null = null,
       backdrop = false,
-      levelToCharacter = false
+      levelToCharacter = false,
+      advancedSceneColor = false
   ): Promise<StoredImage> {
     const { width, height, jpegQuality } = this.options.output
     const overlays: OverlayOptions[] = []
@@ -52,6 +53,11 @@ export class SharpCompositor implements Compositor {
     const characterPaths = plan.flatMap((layer) => layer.kind === 'placed' && layer.resource.type === 'character' ? [layer.resource.src] : [])
     const referenceTone = removal?.matchSceneTone
         ? await this.referenceTone(sceneLayer?.kind === 'fill' ? sceneLayer.resource.src : undefined, characterPaths)
+        : undefined
+
+    // Filtro avanzado de color: perfil de luz y ambiente de la escena (sustituye a la corrección básica).
+    const advancedProfile = advancedSceneColor && removal
+        ? await this.sceneColorProfile(sceneLayer?.kind === 'fill' ? sceneLayer.resource.src : undefined, characterPaths)
         : undefined
 
     // Nivelado automático: línea de apoyo del primer personaje, en fracciones de la zona de la persona.
@@ -69,7 +75,7 @@ export class SharpCompositor implements Compositor {
 
     for (const layer of plan) {
       if (layer.kind === 'photo') {
-        const person = await this.person(originalPath, layer.width, layer.height, removal, framing, frame, backdrop, referenceTone, sceneLayer !== undefined)
+        const person = await this.person(originalPath, layer.width, layer.height, removal, framing, frame, backdrop, referenceTone, sceneLayer !== undefined, levelBaseline, advancedProfile)
         if (person.shadow) {
           overlays.push(...(await this.clip(person.shadow.input, layer.left + person.left + person.shadow.left, layer.top + person.top + person.shadow.top, person.shadow.width, person.shadow.height)))
         }
@@ -137,7 +143,8 @@ export class SharpCompositor implements Compositor {
       backdrop = false,
       referenceTone?: PhotoTone,
       hasScene = false,
-      levelBaseline: number | null = null
+      levelBaseline: number | null = null,
+      advancedProfile?: SceneColorProfile
   ): Promise<{ input: Buffer; left: number; top: number; width: number; height: number; shadow?: Awaited<ReturnType<typeof contactShadow>> }> {
     const source = sharp(join(this.options.dataRoot, originalPath)).rotate()
     const { width: frameWidth = regionWidth, height: frameHeight = regionHeight } = await source.clone().metadata()
@@ -189,11 +196,12 @@ export class SharpCompositor implements Compositor {
         rgb[i * 3 + 2] = data[i * 4 + 2]!
         alpha[i] = data[i * 4 + 3]!
       }
-      const integrated = integratePerson(rgb, alpha, info.width, info.height, referenceTone)
+      const integrated = integratePerson(rgb, alpha, info.width, info.height, advancedProfile ? undefined : referenceTone)
+      const gradedChroma = advancedProfile ? applySceneColorGrade(integrated, alpha, info.width, info.height, advancedProfile) : integrated
       for (let i = 0; i < pixels; i++) {
-        data[i * 4] = integrated[i * 3]!
-        data[i * 4 + 1] = integrated[i * 3 + 1]!
-        data[i * 4 + 2] = integrated[i * 3 + 2]!
+        data[i * 4] = gradedChroma[i * 3]!
+        data[i * 4 + 1] = gradedChroma[i * 3 + 1]!
+        data[i * 4 + 2] = gradedChroma[i * 3 + 2]!
       }
       const leveledChroma = levelBaseline !== null ? this.levelPlacement(place, alpha, info.width, info.height, regionHeight, levelBaseline) : place
       return { ...leveledChroma, input: await sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } }).png({ compressionLevel: 1 }).toBuffer() }
@@ -212,9 +220,10 @@ export class SharpCompositor implements Compositor {
       const alpha = refineMatte(guided, data, info.width, info.height)
       this.options.onTiming?.('refine', performance.now() - started)
       started = performance.now()
-      const integrated = integratePerson(data, alpha, info.width, info.height, referenceTone)
+      const integrated = integratePerson(data, alpha, info.width, info.height, advancedProfile ? undefined : referenceTone)
+      const graded = advancedProfile ? applySceneColorGrade(integrated, alpha, info.width, info.height, advancedProfile) : integrated
       this.options.onTiming?.('integration', performance.now() - started)
-      const input = await sharp(integrated, { raw: { width: info.width, height: info.height, channels: 3 } })
+      const input = await sharp(graded, { raw: { width: info.width, height: info.height, channels: 3 } })
           .joinChannel(alpha, { raw: { width: info.width, height: info.height, channels: 1 } })
           .png({ compressionLevel: 1 })
           .toBuffer()
@@ -274,6 +283,91 @@ export class SharpCompositor implements Compositor {
       return null
     } catch {
       return null
+    }
+  }
+
+  /** Estadísticas de color y luz de un recurso (64 px), ponderadas por su alfa. */
+  private async colorStats(relativePath: string): Promise<SceneColorProfile | undefined> {
+    try {
+      const { data, info } = await (await this.load(relativePath, 64)).resize(64, 64, { fit: 'inside' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
+      let red = 0
+      let green = 0
+      let blue = 0
+      let sat = 0
+      let sum = 0
+      let sumSq = 0
+      let weight = 0
+      let top = 0
+      let topWeight = 0
+      let bottom = 0
+      let bottomWeight = 0
+      for (let y = 0; y < info.height; y++) {
+        for (let x = 0; x < info.width; x++) {
+          const i = (y * info.width + x) * 4
+          const a = data[i + 3]! / 255
+          if (a <= 0.02) continue
+          const r = data[i]! / 255
+          const g = data[i + 1]! / 255
+          const b = data[i + 2]! / 255
+          const l = 0.2126 * r + 0.7152 * g + 0.0722 * b
+          red += r * a
+          green += g * a
+          blue += b * a
+          const max = Math.max(r, g, b)
+          sat += (max > 0 ? (max - Math.min(r, g, b)) / max : 0) * a
+          sum += l * a
+          sumSq += l * l * a
+          weight += a
+          if (y < info.height / 2) { top += l * a; topWeight += a } else { bottom += l * a; bottomWeight += a }
+        }
+      }
+      if (weight === 0) return undefined
+      const luminance = sum / weight
+      return {
+        red: red / weight,
+        green: green / weight,
+        blue: blue / weight,
+        luminance,
+        saturation: sat / weight,
+        contrast: Math.sqrt(Math.max(0, sumSq / weight - luminance * luminance)),
+        skyLight: topWeight > 0 && bottomWeight > 0 ? top / topWeight - bottom / bottomWeight : 0
+      }
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * Perfil del filtro avanzado: el escenario domina (75 %) y los personajes aportan el 25 %.
+   * La luz cenital solo se mide en el escenario; en los personajes (PNG transparentes) no aplica.
+   */
+  private async sceneColorProfile(scenePath: string | undefined, characterPaths: string[]): Promise<SceneColorProfile | undefined> {
+    const [scene, ...characters] = await Promise.all([
+      scenePath ? this.colorStats(scenePath) : Promise.resolve(undefined),
+      ...characterPaths.map((path) => this.colorStats(path))
+    ])
+    const usable = characters.filter((c): c is SceneColorProfile => c !== undefined)
+    const average = (pick: (p: SceneColorProfile) => number) => usable.reduce((s, p) => s + pick(p), 0) / usable.length
+    const character = usable.length === 0 ? undefined : {
+      red: average((p) => p.red),
+      green: average((p) => p.green),
+      blue: average((p) => p.blue),
+      luminance: average((p) => p.luminance),
+      saturation: average((p) => p.saturation),
+      contrast: average((p) => p.contrast),
+      skyLight: 0
+    }
+    if (!scene) return character
+    if (!character) return scene
+    const mix = (a: number, b: number) => a * 0.75 + b * 0.25
+    return {
+      red: mix(scene.red, character.red),
+      green: mix(scene.green, character.green),
+      blue: mix(scene.blue, character.blue),
+      luminance: mix(scene.luminance, character.luminance),
+      saturation: mix(scene.saturation, character.saturation),
+      contrast: mix(scene.contrast, character.contrast),
+      skyLight: scene.skyLight
     }
   }
 

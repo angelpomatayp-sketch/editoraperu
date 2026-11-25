@@ -29,6 +29,7 @@ const GROUPS: { title: string; fields: [path: string, label: string, kind?: Kind
       ['capture.autoFraming', 'Encuadre automático: centrar y agrandar a la persona, de cuerpo entero (con recorte automático del fondo)', 'boolean'],
       ['capture.matchCharacterSize', 'Adaptar el tamaño de la persona al personaje seleccionado (con recorte automático del fondo)', 'boolean'],
       ['capture.levelToCharacter', 'Nivelado automático de usuario con relación al personaje (alinea los pies en la foto final; con recorte automático del fondo)', 'boolean'],
+      ['capture.advancedSceneColor', 'Filtro avanzado de color de usuario en relación a la escena (luz y ambiente del escenario en la foto final; con fondo recortado)', 'boolean'],
       ['capture.framingPercent', 'Encuadre fijo (%), si no hay encuadre automático: 0 = imagen completa, 100 = llenar la zona (zoom)']
     ]
   },
@@ -147,7 +148,10 @@ export function GeneralSettings(): React.JSX.Element {
         <Notice kind="info">La conservación activada elimina fotografías y anonimiza datos antiguos de forma automática e irreversible.</Notice>
       )}
       {settings.capture.matchCharacterSize && (
-        <Notice kind="info">El ajuste al personaje funciona sin activar el encuadre automático general. Usa la altura visible y el apoyo del primer personaje seleccionado, dentro de la zona de la persona. Requiere cuerpo entero y recorte automático del fondo; no modifica el fondo real, el croma ni los escenarios con hueco para la foto. Si no hay una referencia válida, se conserva el encuadre habitual.</Notice>
+          <Notice kind="info">El ajuste al personaje funciona sin activar el encuadre automático general. Usa la altura visible y el apoyo del primer personaje seleccionado, dentro de la zona de la persona. Requiere cuerpo entero y recorte automático del fondo; no modifica el fondo real, el croma ni los escenarios con hueco para la foto. Si no hay una referencia válida, se conserva el encuadre habitual.</Notice>
+      )}
+      {settings.capture.advancedSceneColor && (
+          <Notice kind="info">El filtro avanzado de color analiza la luz y el ambiente del escenario (por ejemplo, luz cálida de playa) y corrige el tono, brillo, saturación y contraste de la persona, con límites para no falsear la piel. Solo afecta a la foto final con fondo recortado (croma o automático); mientras esté activado, sustituye al ajuste básico «Adaptar brillo y color». No cambia la cámara ni la vista previa en vivo.</Notice>
       )}
       {message && <Notice kind={message.kind}>{message.text}</Notice>}
       <div className="aform__actions">
