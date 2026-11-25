@@ -28,6 +28,7 @@ const GROUPS: { title: string; fields: [path: string, label: string, kind?: Kind
       ['capture.rotation', 'Rotación de la cámara (grados: 0, 90, 180 o 270), si está montada girada'],
       ['capture.autoFraming', 'Encuadre automático: centrar y agrandar a la persona, de cuerpo entero (con recorte automático del fondo)', 'boolean'],
       ['capture.matchCharacterSize', 'Adaptar el tamaño de la persona al personaje seleccionado (con recorte automático del fondo)', 'boolean'],
+      ['capture.levelToCharacter', 'Nivelado automático de usuario con relación al personaje (alinea los pies en la foto final; con recorte automático del fondo)', 'boolean'],
       ['capture.framingPercent', 'Encuadre fijo (%), si no hay encuadre automático: 0 = imagen completa, 100 = llenar la zona (zoom)']
     ]
   },

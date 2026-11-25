@@ -71,7 +71,9 @@ export interface Compositor {
      * Zona transparente de un escenario: lo que la imagen no cubre se rellena con la misma foto
      * ampliada y desenfocada, para no dejar huecos sin forzar zoom.
      */
-    backdrop?: boolean
+    backdrop?: boolean,
+    /** Nivelado automático: apoya los pies de la persona en la misma línea que el primer personaje. */
+    levelToCharacter?: boolean
   ): Promise<StoredImage>
 }
 
@@ -221,13 +223,14 @@ export class CaptureService {
       const automaticEnabled = capture.autoFraming || (capture.matchCharacterSize && inputs.characters.length > 0)
       const autoFrame = removal?.method === 'segmentation' && automaticEnabled && frame ? sanitizePlacement(frame) : null
       stored = await this.deps.compositor.compose(
-        plan,
-        state.original.filePath,
-        this.deps.files.finalPath(finalId),
-        removal,
-        framing,
-        autoFrame,
-        inputs.fillsHole === true
+          plan,
+          state.original.filePath,
+          this.deps.files.finalPath(finalId),
+          removal,
+          framing,
+          autoFrame,
+          inputs.fillsHole === true,
+          capture.levelToCharacter === true && removal?.method === 'segmentation'
       )
       const characters = plan.flatMap((l) => (l.kind === 'placed' && l.resource.type === 'character' ? [{ left: l.left, top: l.top, width: l.width }] : []))
       this.record('info', 'composition.compose', 'ok', { layers: plan.length, characters, milliseconds: Date.now() - started }, finalId)

@@ -37,21 +37,35 @@ export class SharpCompositor implements Compositor {
   constructor(private readonly options: CompositorOptions) {}
 
   async compose(
-    plan: PlannedLayer[],
-    originalPath: string,
-    outputPath: string,
-    removal: BackgroundRemoval,
-    framing = 1,
-    frame: FramePlacement | null = null,
-    backdrop = false
+      plan: PlannedLayer[],
+      originalPath: string,
+      outputPath: string,
+      removal: BackgroundRemoval,
+      framing = 1,
+      frame: FramePlacement | null = null,
+      backdrop = false,
+      levelToCharacter = false
   ): Promise<StoredImage> {
     const { width, height, jpegQuality } = this.options.output
     const overlays: OverlayOptions[] = []
     const sceneLayer = plan.find((layer) => layer.kind === 'fill' && layer.resource.type === 'scenario')
     const characterPaths = plan.flatMap((layer) => layer.kind === 'placed' && layer.resource.type === 'character' ? [layer.resource.src] : [])
     const referenceTone = removal?.matchSceneTone
-      ? await this.referenceTone(sceneLayer?.kind === 'fill' ? sceneLayer.resource.src : undefined, characterPaths)
-      : undefined
+        ? await this.referenceTone(sceneLayer?.kind === 'fill' ? sceneLayer.resource.src : undefined, characterPaths)
+        : undefined
+
+    // Nivelado automático: línea de apoyo del primer personaje, en fracciones de la zona de la persona.
+    let levelBaseline: number | null = null
+    if (levelToCharacter) {
+      const photoLayer = plan.find((layer) => layer.kind === 'photo')
+      const characterLayer = plan.find((layer) => layer.kind === 'placed' && layer.resource.type === 'character')
+      if (photoLayer?.kind === 'photo' && characterLayer?.kind === 'placed' && photoLayer.height > 0) {
+        const bottom = await this.visibleBottomFraction(characterLayer.resource.src)
+        if (bottom !== null) {
+          levelBaseline = (characterLayer.top + bottom * characterLayer.height - photoLayer.top) / photoLayer.height
+        }
+      }
+    }
 
     for (const layer of plan) {
       if (layer.kind === 'photo') {
@@ -114,15 +128,16 @@ export class SharpCompositor implements Compositor {
    * más rápido que procesar la captura completa. Devuelve la imagen y su posición dentro de la zona.
    */
   private async person(
-    originalPath: string,
-    regionWidth: number,
-    regionHeight: number,
-    removal: BackgroundRemoval,
-    framing: number,
-    frame: FramePlacement | null,
-    backdrop = false,
-    referenceTone?: PhotoTone,
-    hasScene = false
+      originalPath: string,
+      regionWidth: number,
+      regionHeight: number,
+      removal: BackgroundRemoval,
+      framing: number,
+      frame: FramePlacement | null,
+      backdrop = false,
+      referenceTone?: PhotoTone,
+      hasScene = false,
+      levelBaseline: number | null = null
   ): Promise<{ input: Buffer; left: number; top: number; width: number; height: number; shadow?: Awaited<ReturnType<typeof contactShadow>> }> {
     const source = sharp(join(this.options.dataRoot, originalPath)).rotate()
     const { width: frameWidth = regionWidth, height: frameHeight = regionHeight } = await source.clone().metadata()
@@ -180,7 +195,8 @@ export class SharpCompositor implements Compositor {
         data[i * 4 + 1] = integrated[i * 3 + 1]!
         data[i * 4 + 2] = integrated[i * 3 + 2]!
       }
-      return { ...place, input: await sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } }).png({ compressionLevel: 1 }).toBuffer() }
+      const leveledChroma = levelBaseline !== null ? this.levelPlacement(place, alpha, info.width, info.height, regionHeight, levelBaseline) : place
+      return { ...leveledChroma, input: await sharp(data, { raw: { width: info.width, height: info.height, channels: 4 } }).png({ compressionLevel: 1 }).toBuffer() }
     }
 
     const { data, info } = await resized.removeAlpha().raw().toBuffer({ resolveWithObject: true })
@@ -199,15 +215,65 @@ export class SharpCompositor implements Compositor {
       const integrated = integratePerson(data, alpha, info.width, info.height, referenceTone)
       this.options.onTiming?.('integration', performance.now() - started)
       const input = await sharp(integrated, { raw: { width: info.width, height: info.height, channels: 3 } })
-        .joinChannel(alpha, { raw: { width: info.width, height: info.height, channels: 1 } })
-        .png({ compressionLevel: 1 })
-        .toBuffer()
+          .joinChannel(alpha, { raw: { width: info.width, height: info.height, channels: 1 } })
+          .png({ compressionLevel: 1 })
+          .toBuffer()
+      const leveled = levelBaseline !== null ? this.levelPlacement(place, alpha, info.width, info.height, regionHeight, levelBaseline) : place
       const shadow = !hasScene ? null : await contactShadow(alpha, info.width, info.height)
-      return { ...place, input, ...(shadow ? { shadow } : {}) }
+      return { ...leveled, input, ...(shadow ? { shadow } : {}) }
     } catch (error) {
       // Mejor una foto con su fondo que ninguna foto: se compone completa y se avisa.
       this.options.onWarning?.('segmentation_failed', error)
       return { ...place, input: await sharp(data, { raw: { width: info.width, height: info.height, channels: 3 } }).png({ compressionLevel: 1 }).toBuffer() }
+    }
+  }
+
+  /**
+   * Desplaza verticalmente a la persona recortada para que su borde inferior visible (los pies) quede
+   * en la línea de apoyo del personaje (`baseline`, fracción del alto de la zona). No escala ni recorta:
+   * solo mueve la capa, con límites para no sacar los pies de la zona ni la cabeza por arriba.
+   */
+  private levelPlacement(
+      place: { left: number; top: number; width: number; height: number },
+      alpha: Uint8Array | Buffer,
+      width: number,
+      height: number,
+      regionHeight: number,
+      baseline: number
+  ): { left: number; top: number; width: number; height: number } {
+    let first = -1
+    let last = -1
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (alpha[y * width + x]! >= 16) {
+          if (first < 0) first = y
+          last = y
+          break
+        }
+      }
+    }
+    if (last < 0 || !Number.isFinite(baseline)) return place
+    const bottomFraction = (last + 1) / height
+    const topFraction = first / height
+    const desiredTop = baseline * regionHeight - bottomFraction * place.height
+    const maxTop = regionHeight - bottomFraction * place.height
+    const minTop = -topFraction * place.height
+    const top = Math.round(Math.min(Math.max(desiredTop, minTop), maxTop))
+    return { ...place, top }
+  }
+
+  /** Fracción del alto donde termina el contenido visible (alfa) de un recurso; `null` si no se puede medir. */
+  private async visibleBottomFraction(relativePath: string): Promise<number | null> {
+    try {
+      const { data, info } = await (await this.load(relativePath, 64)).resize(64, 64, { fit: 'inside' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
+      for (let y = info.height - 1; y >= 0; y--) {
+        for (let x = 0; x < info.width; x++) {
+          if (data[(y * info.width + x) * 4 + 3]! >= 16) return (y + 1) / info.height
+        }
+      }
+      return null
+    } catch {
+      return null
     }
   }
 

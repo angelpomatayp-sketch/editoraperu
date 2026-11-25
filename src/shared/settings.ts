@@ -44,10 +44,12 @@ export const settingsSchema = z
        * entero. Si no se detecta a nadie (o sin recorte automático), se usa `framingPercent`.
        */
       autoFraming: z.boolean(),
-      /** Adapta la persona a la altura del primer personaje seleccionado; solo con recorte automático. */
-      matchCharacterSize: z.boolean().default(false),
-      /** Cámara montada girada: grados (sentido horario) para enderezar la imagen. 0, 90, 180 o 270. */
-      rotation: z.number().refine((v) => [0, 90, 180, 270].includes(v), { message: 'Use 0, 90, 180 o 270' }),
+        /** Adapta la persona a la altura del primer personaje seleccionado; solo con recorte automático. */
+        matchCharacterSize: z.boolean().default(false),
+        /** Nivelado automático: alinea los pies de la persona con los del primer personaje en la foto final (recorte automático). */
+        levelToCharacter: z.boolean().default(false),
+        /** Cámara montada girada: grados (sentido horario) para enderezar la imagen. 0, 90, 180 o 270. */
+        rotation: z.number().refine((v) => [0, 90, 180, 270].includes(v), { message: 'Use 0, 90, 180 o 270' }),
       /** Aviso grande «Ubíquese aquí» sobre la zona de la persona hasta que alguien se ubique. */
       positionHint: z.boolean(),
       /** Solo aplicar calibración guardada si el operador lo activa; no reemplazar la del controlador. */
@@ -107,7 +109,7 @@ export const DEFAULT_SETTINGS: Settings = {
   kiosk: { enabled: true, autoStart: true },
   session: { inactivityWarningSeconds: 60, inactivityCancelSeconds: 15 },
   experience: { skipSingleCampaign: true },
-  capture: { countdownSeconds: 10, maxAttempts: 3, soundEnabled: true, maxRetakes: 2, mirror: true, cameraLabel: '', framingPercent: 0, autoFraming: false, matchCharacterSize: false, rotation: 0, positionHint: true, cameraControlsEnabled: false, matchSceneTone: false, cameraControls: {} },
+    capture: { countdownSeconds: 10, maxAttempts: 3, soundEnabled: true, maxRetakes: 2, mirror: true, cameraLabel: '', framingPercent: 0, autoFraming: false, matchCharacterSize: false, levelToCharacter: false, rotation: 0, positionHint: true, cameraControlsEnabled: false, matchSceneTone: false, cameraControls: {} },
   background: { method: 'segmentation' },
   chroma: DEFAULT_CHROMA,
   attract: DEFAULT_ATTRACT,
